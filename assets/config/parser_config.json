@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "endpointUrl": "https://www.giftcardmall.com/balance-check",
+  "formFields": {
+    "cardNumber": "cardNumber",
+    "expiryMonth": "expMonth",
+    "expiryYear": "expYear",
+    "cvv": "cvv",
+    "pin": "pin"
+  },
+  "balanceSelector": ".balance-amount",
+  "transactionSelector": "table.transactions tbody tr",
+  "transactionFields": {
+    "date": ".date",
+    "description": ".description",
+    "amount": ".amount"
+  }
+}

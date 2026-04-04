@@ -1,0 +1,15 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    always_use_package_imports: true
+    avoid_print: true
+    directives_ordering: true
+    prefer_final_fields: true
+    prefer_final_locals: true
+    prefer_relative_imports: false
+    sort_constructors_first: true
+
+analyzer:
+  exclude:
+    - build/**
