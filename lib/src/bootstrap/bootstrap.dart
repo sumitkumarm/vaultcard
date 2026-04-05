@@ -26,6 +26,7 @@ class Bootstrap {
   static Future<Bootstrap> create(SharedPreferences preferences) async {
     final metadataStore = await HiveCardMetadataStore.create();
     final appPreferencesStore = SharedPreferencesAppPreferencesStore(preferences);
+    final notificationService = await NotificationService.create();
     return Bootstrap(
       [
         metadataStoreProvider.overrideWithValue(metadataStore),
@@ -43,15 +44,11 @@ class Bootstrap {
         telemetryServiceProvider.overrideWithValue(
           const NoOpTelemetryService(),
         ),
-        notificationServiceProvider.overrideWithValue(
-          const NotificationService(),
-        ),
+        notificationServiceProvider.overrideWithValue(notificationService),
         biometricServiceProvider.overrideWithValue(
           const BiometricService(),
         ),
-        appLockServiceProvider.overrideWithValue(
-          const AppLockService(),
-        ),
+        appLockServiceProvider.overrideWithValue(AppLockService()),
         scanServiceProvider.overrideWithValue(
           const ScanService(),
         ),

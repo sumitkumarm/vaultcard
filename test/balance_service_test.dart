@@ -41,7 +41,7 @@ void main() {
       client: _FakeGiftCardMallClient(sampleBalanceHtml),
       parser: const HtmlBalanceParser(),
       connectivityService: const _AlwaysOnlineConnectivityService(),
-      notificationService: const NotificationService(),
+      notificationService: NotificationService.noop(),
       telemetryService: const NoOpTelemetryService(),
     );
 
@@ -72,7 +72,7 @@ void main() {
       client: _FakeGiftCardMallClient(sampleBalanceHtml),
       parser: const HtmlBalanceParser(),
       connectivityService: const _AlwaysOnlineConnectivityService(),
-      notificationService: const NotificationService(),
+      notificationService: NotificationService.noop(),
       telemetryService: const NoOpTelemetryService(),
     );
 
@@ -109,7 +109,7 @@ void main() {
       client: _FakeGiftCardMallClient(sampleBalanceHtml),
       parser: const HtmlBalanceParser(),
       connectivityService: const _AlwaysOfflineConnectivityService(),
-      notificationService: const NotificationService(),
+      notificationService: NotificationService.noop(),
       telemetryService: const NoOpTelemetryService(),
     );
 

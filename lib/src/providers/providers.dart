@@ -103,6 +103,56 @@ final revealControllerProvider =
   RevealController.new,
 );
 
+final appLockControllerProvider =
+    NotifierProvider<AppLockController, AppLockState>(
+  AppLockController.new,
+);
+
+class AppLockState {
+  const AppLockState({
+    this.isLocked = false,
+    this.isAuthenticating = false,
+  });
+
+  final bool isLocked;
+  final bool isAuthenticating;
+
+  AppLockState copyWith({
+    bool? isLocked,
+    bool? isAuthenticating,
+  }) {
+    return AppLockState(
+      isLocked: isLocked ?? this.isLocked,
+      isAuthenticating: isAuthenticating ?? this.isAuthenticating,
+    );
+  }
+}
+
+class AppLockController extends Notifier<AppLockState> {
+  @override
+  AppLockState build() => const AppLockState();
+
+  void lock() {
+    state = state.copyWith(isLocked: true);
+  }
+
+  Future<void> unlockIfNeeded() async {
+    final settings = ref.read(settingsControllerProvider).valueOrNull;
+    if (settings == null || !settings.appLockEnabled) {
+      state = const AppLockState();
+      return;
+    }
+    state = state.copyWith(isLocked: true, isAuthenticating: true);
+    final authenticated = await ref
+        .read(biometricServiceProvider)
+        .authenticate('Unlock VaultCard');
+    state = AppLockState(
+      isLocked: !authenticated,
+      isAuthenticating: false,
+    );
+  }
+}
+
 class SettingsController extends AsyncNotifier<AppSettings> {
   @override
   Future<AppSettings> build() {
