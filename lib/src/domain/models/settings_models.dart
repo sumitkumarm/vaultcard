@@ -8,6 +8,15 @@ class NotificationPreferences {
     this.refreshFailed = true,
   });
 
+  factory NotificationPreferences.fromJson(Map<String, dynamic> json) {
+    return NotificationPreferences(
+      expiryWarning: json['expiryWarning'] as bool? ?? true,
+      lowBalance: json['lowBalance'] as bool? ?? true,
+      balanceUpdated: json['balanceUpdated'] as bool? ?? false,
+      refreshFailed: json['refreshFailed'] as bool? ?? true,
+    );
+  }
+
   final bool expiryWarning;
   final bool lowBalance;
   final bool balanceUpdated;
@@ -35,15 +44,6 @@ class NotificationPreferences {
       'refreshFailed': refreshFailed,
     };
   }
-
-  factory NotificationPreferences.fromJson(Map<String, dynamic> json) {
-    return NotificationPreferences(
-      expiryWarning: json['expiryWarning'] as bool? ?? true,
-      lowBalance: json['lowBalance'] as bool? ?? true,
-      balanceUpdated: json['balanceUpdated'] as bool? ?? false,
-      refreshFailed: json['refreshFailed'] as bool? ?? true,
-    );
-  }
 }
 
 class AppSettings {
@@ -54,6 +54,21 @@ class AppSettings {
     this.sortOption = CardSortOption.dateAddedNewest,
     this.notificationPreferences = const NotificationPreferences(),
   });
+
+  factory AppSettings.fromJson(Map<String, dynamic> json) {
+    return AppSettings(
+      onboardingCompleted: json['onboardingCompleted'] as bool? ?? false,
+      appLockEnabled: json['appLockEnabled'] as bool? ?? false,
+      analyticsEnabled: json['analyticsEnabled'] as bool? ?? false,
+      sortOption: CardSortOption.values.firstWhere(
+        (value) => value.name == json['sortOption'],
+        orElse: () => CardSortOption.dateAddedNewest,
+      ),
+      notificationPreferences: NotificationPreferences.fromJson(
+        (json['notificationPreferences'] as Map<String, dynamic>? ?? const {}),
+      ),
+    );
+  }
 
   final bool onboardingCompleted;
   final bool appLockEnabled;
@@ -86,20 +101,5 @@ class AppSettings {
       'sortOption': sortOption.name,
       'notificationPreferences': notificationPreferences.toJson(),
     };
-  }
-
-  factory AppSettings.fromJson(Map<String, dynamic> json) {
-    return AppSettings(
-      onboardingCompleted: json['onboardingCompleted'] as bool? ?? false,
-      appLockEnabled: json['appLockEnabled'] as bool? ?? false,
-      analyticsEnabled: json['analyticsEnabled'] as bool? ?? false,
-      sortOption: CardSortOption.values.firstWhere(
-        (value) => value.name == json['sortOption'],
-        orElse: () => CardSortOption.dateAddedNewest,
-      ),
-      notificationPreferences: NotificationPreferences.fromJson(
-        (json['notificationPreferences'] as Map<String, dynamic>? ?? const {}),
-      ),
-    );
   }
 }

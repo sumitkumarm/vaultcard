@@ -119,7 +119,7 @@ class CardDetailScreen extends ConsumerWidget {
                   _SensitiveRow(
                     label: 'Card Number',
                     value:
-                        revealState.revealedNumber ?? '•••• •••• •••• ${card.last4}',
+                        revealState.revealedNumber ?? '**** **** **** ${card.last4}',
                     actionLabel: 'Reveal',
                     isBusy: revealState.isAuthenticating,
                     onPressed: () => ref
@@ -129,7 +129,7 @@ class CardDetailScreen extends ConsumerWidget {
                   const SizedBox(height: 12),
                   _SensitiveRow(
                     label: 'PIN',
-                    value: revealState.revealedPin ?? '••••',
+                    value: revealState.revealedPin ?? '****',
                     actionLabel: 'Reveal',
                     isBusy: revealState.isAuthenticating,
                     onPressed: () => ref
@@ -205,7 +205,7 @@ class _SensitiveRow extends StatelessWidget {
         const SizedBox(width: 12),
         OutlinedButton(
           onPressed: isBusy ? null : onPressed,
-          child: Text(isBusy ? 'Checking…' : actionLabel),
+          child: Text(isBusy ? 'Checking...' : actionLabel),
         ),
       ],
     );

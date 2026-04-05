@@ -106,7 +106,7 @@ class _CardEntryFormScreenState extends ConsumerState<CardEntryFormScreen> {
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<CardNetwork>(
-                value: _network == CardNetwork.unknown ? null : _network,
+                initialValue: _network == CardNetwork.unknown ? null : _network,
                 decoration: const InputDecoration(labelText: 'Network'),
                 items: CardNetwork.values
                     .where((network) => network != CardNetwork.unknown)
@@ -132,6 +132,7 @@ class _CardEntryFormScreenState extends ConsumerState<CardEntryFormScreen> {
               const SizedBox(height: 24),
               FilledButton(
                 onPressed: () async {
+                  final router = GoRouter.of(context);
                   if (!_formKey.currentState!.validate()) {
                     return;
                   }
@@ -151,7 +152,7 @@ class _CardEntryFormScreenState extends ConsumerState<CardEntryFormScreen> {
                   if (!mounted) {
                     return;
                   }
-                  context.go('/card/$id');
+                  router.go('/card/$id');
                 },
                 child: const Text('Save Card'),
               ),

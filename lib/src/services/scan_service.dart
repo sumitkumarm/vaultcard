@@ -10,8 +10,13 @@ class ScanService {
               RegExp(r'[\s-]'),
               '',
             );
+    final labeledExpiryMatch = RegExp(
+      r'(?:exp|expiry)[:\s]*((0[1-9]|1[0-2])\/([0-9]{2}))',
+      caseSensitive: false,
+    ).firstMatch(source);
     final expiryMatch =
-        RegExp(r'(0[1-9]|1[0-2])\/?([0-9]{2})').firstMatch(source);
+        labeledExpiryMatch ??
+        RegExp(r'\b(0[1-9]|1[0-2])\/([0-9]{2})\b').firstMatch(source);
     final labeledCvvMatch = RegExp(
       r'cvv[:\s]*([0-9]{3,4})',
       caseSensitive: false,
@@ -23,7 +28,9 @@ class ScanService {
 
     final expiry = expiryMatch == null
         ? null
-        : '${expiryMatch.group(1)}/${expiryMatch.group(2)}';
+        : labeledExpiryMatch != null
+            ? labeledExpiryMatch.group(1)
+            : '${expiryMatch.group(1)}/${expiryMatch.group(2)}';
     final cvv = labeledCvvMatch?.group(1) ??
         (cvvMatch.length >= 2 ? cvvMatch.last : null);
     final network = cardMatch == null ? inferNetwork('') : inferNetwork(cardMatch);

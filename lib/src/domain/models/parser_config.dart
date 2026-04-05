@@ -8,13 +8,6 @@ class ParserConfig {
     required this.transactionFields,
   });
 
-  final int version;
-  final String endpointUrl;
-  final ParserFormFields formFields;
-  final String balanceSelector;
-  final String transactionSelector;
-  final ParserTransactionFields transactionFields;
-
   factory ParserConfig.fromJson(Map<String, dynamic> json) {
     return ParserConfig(
       version: json['version'] as int,
@@ -29,6 +22,13 @@ class ParserConfig {
       ),
     );
   }
+
+  final int version;
+  final String endpointUrl;
+  final ParserFormFields formFields;
+  final String balanceSelector;
+  final String transactionSelector;
+  final ParserTransactionFields transactionFields;
 }
 
 class ParserFormFields {
@@ -40,12 +40,6 @@ class ParserFormFields {
     required this.pin,
   });
 
-  final String cardNumber;
-  final String expiryMonth;
-  final String expiryYear;
-  final String cvv;
-  final String pin;
-
   factory ParserFormFields.fromJson(Map<String, dynamic> json) {
     return ParserFormFields(
       cardNumber: json['cardNumber'] as String,
@@ -55,6 +49,12 @@ class ParserFormFields {
       pin: json['pin'] as String,
     );
   }
+
+  final String cardNumber;
+  final String expiryMonth;
+  final String expiryYear;
+  final String cvv;
+  final String pin;
 }
 
 class ParserTransactionFields {
@@ -64,10 +64,6 @@ class ParserTransactionFields {
     required this.amount,
   });
 
-  final String date;
-  final String description;
-  final String amount;
-
   factory ParserTransactionFields.fromJson(Map<String, dynamic> json) {
     return ParserTransactionFields(
       date: json['date'] as String,
@@ -75,4 +71,8 @@ class ParserTransactionFields {
       amount: json['amount'] as String,
     );
   }
+
+  final String date;
+  final String description;
+  final String amount;
 }

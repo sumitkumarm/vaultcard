@@ -23,7 +23,7 @@ CardNetwork inferNetwork(String cardNumber) {
 String maskCardNumber(String cardNumber) {
   final trimmed = cardNumber.replaceAll(RegExp(r'\s+'), '');
   final last4 = trimmed.substring(trimmed.length - 4);
-  return '•••• •••• •••• $last4';
+  return '**** **** **** $last4';
 }
 
 String formatCurrency(double value) {

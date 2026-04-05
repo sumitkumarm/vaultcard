@@ -7,10 +7,10 @@ import 'test_assets.dart';
 void main() {
   test('parses balance and transactions from fixture html', () {
     const parser = HtmlBalanceParser();
-    final config = ParserConfig(
+    const config = ParserConfig(
       version: 1,
       endpointUrl: 'https://example.com',
-      formFields: const ParserFormFields(
+      formFields: ParserFormFields(
         cardNumber: 'cardNumber',
         expiryMonth: 'expMonth',
         expiryYear: 'expYear',
@@ -19,7 +19,7 @@ void main() {
       ),
       balanceSelector: '.balance-amount',
       transactionSelector: 'table.transactions tbody tr',
-      transactionFields: const ParserTransactionFields(
+      transactionFields: ParserTransactionFields(
         date: '.date',
         description: '.description',
         amount: '.amount',
