@@ -119,6 +119,42 @@ void main() {
     expect(outcome.failure!.reason, RefreshFailureReason.offline);
     expect(repository.markFailureCalled, isTrue);
   });
+
+  test('surfaces bot protection when GiftCardMall blocks direct HTTP',
+      () async {
+    final repository = _FakeCardRepository(
+      card: VaultCard(
+        id: '1',
+        network: CardNetwork.visa,
+        last4: '1111',
+        expiry: '06/27',
+        addedAt: DateTime(2026),
+      ),
+      credentials: const CardCredentials(
+        cardNumber: '4111111111111111',
+        expiry: '06/27',
+        cvv: '123',
+        pin: '4567',
+      ),
+    );
+
+    final service = BalanceService(
+      repository: repository,
+      parserConfigProvider: _FakeParserConfigProvider(),
+      client: _BlockedGiftCardMallClient(),
+      parser: const HtmlBalanceParser(),
+      connectivityService: const _AlwaysOnlineConnectivityService(),
+      notificationService: NotificationService.noop(),
+      telemetryService: const NoOpTelemetryService(),
+    );
+
+    final outcome = await service.refreshCard('1');
+
+    expect(outcome.isFailure, isTrue);
+    expect(outcome.failure!.reason, RefreshFailureReason.botProtection);
+    expect(repository.markFailureCalled, isTrue);
+    expect(repository.card.refreshBlockedUntil, isNotNull);
+  });
 }
 
 class _FakeParserConfigProvider implements ParserConfigProvider {
@@ -171,6 +207,16 @@ class _AlwaysOfflineConnectivityService extends ConnectivityService {
 
   @override
   Future<bool> isOnline() async => false;
+}
+
+class _BlockedGiftCardMallClient extends GiftCardMallClient {
+  @override
+  Future<GiftCardMallResponse> fetchBalance({
+    required ParserConfig config,
+    required CardCredentials credentials,
+  }) {
+    throw const GiftCardMallBotProtectionException();
+  }
 }
 
 class _FakeCardRepository implements CardRepository {

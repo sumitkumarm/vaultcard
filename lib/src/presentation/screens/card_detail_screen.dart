@@ -27,8 +27,9 @@ class CardDetailScreen extends ConsumerWidget {
         actions: [
           IconButton(
             onPressed: () async {
-              final outcome =
-                  await ref.read(cardsControllerProvider.notifier).refreshCard(cardId);
+              final outcome = await ref
+                  .read(cardsControllerProvider.notifier)
+                  .refreshCard(cardId);
               if (!context.mounted) {
                 return;
               }
@@ -68,7 +69,9 @@ class CardDetailScreen extends ConsumerWidget {
                 ),
               );
               if (confirmed == true && context.mounted) {
-                await ref.read(cardsControllerProvider.notifier).deleteCard(cardId);
+                await ref
+                    .read(cardsControllerProvider.notifier)
+                    .deleteCard(cardId);
                 if (context.mounted) {
                   context.go('/');
                 }
@@ -83,6 +86,23 @@ class CardDetailScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
+          if (card.fetchFailureCount > 0) ...[
+            Card(
+              color: Theme.of(context).colorScheme.errorContainer,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  card.lastFetchedAt == null
+                      ? 'Balance refresh has failed ${card.fetchFailureCount} time(s). The card has not been synced yet.'
+                      : 'Balance data may be stale. Refresh has failed ${card.fetchFailureCount} time(s) since the last successful sync.',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onErrorContainer,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           Card(
             child: Padding(
               padding: const EdgeInsets.all(24),
@@ -118,8 +138,8 @@ class CardDetailScreen extends ConsumerWidget {
                   const SizedBox(height: 12),
                   _SensitiveRow(
                     label: 'Card Number',
-                    value:
-                        revealState.revealedNumber ?? '**** **** **** ${card.last4}',
+                    value: revealState.revealedNumber ??
+                        '**** **** **** ${card.last4}',
                     actionLabel: 'Reveal',
                     isBusy: revealState.isAuthenticating,
                     onPressed: () => ref
@@ -159,7 +179,8 @@ class CardDetailScreen extends ConsumerWidget {
                       (tx) => ListTile(
                         contentPadding: EdgeInsets.zero,
                         title: Text(tx.description),
-                        subtitle: Text(tx.date.toIso8601String().split('T').first),
+                        subtitle:
+                            Text(tx.date.toIso8601String().split('T').first),
                         trailing: Text(formatCurrency(tx.amount)),
                       ),
                     ),

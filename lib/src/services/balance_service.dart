@@ -83,6 +83,23 @@ class BalanceService {
         <String, Object?>{'cardId': cardId},
       );
       return RefreshOutcome.success(result);
+    } on GiftCardMallBotProtectionException catch (error) {
+      await _repository.markRefreshFailure(cardId);
+      await _repository.updateRefreshCooldown(
+        cardId,
+        DateTime.now().add(const Duration(days: 1)),
+      );
+      await _telemetryService.track(
+        'balance_refresh_failed',
+        <String, Object?>{'reason': 'bot_protection', 'error': error.message},
+      );
+      return const RefreshOutcome.failure(
+        RefreshFailure(
+          reason: RefreshFailureReason.botProtection,
+          message:
+              'GiftCardMall is blocking automated balance checks right now.',
+        ),
+      );
     } on FormatException catch (error) {
       await _repository.markRefreshFailure(cardId);
       await _telemetryService.track(

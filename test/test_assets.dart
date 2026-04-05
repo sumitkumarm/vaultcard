@@ -19,3 +19,20 @@ const sampleBalanceHtml = '''
   </body>
 </html>
 ''';
+
+const sampleBotProtectionHtml = '''
+<html lang="en">
+  <head>
+    <title>giftcardmall.com</title>
+  </head>
+  <body style="margin:0">
+    <p id="cmsg">Please enable JS and disable any ad blocker</p>
+    <script data-cfasync="false">
+      var dd = {
+        'host': 'geo.captcha-delivery.com',
+        'cookie': 'datadome=abc123'
+      };
+    </script>
+  </body>
+</html>
+''';

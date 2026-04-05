@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "endpointUrl": "https://www.giftcardmall.com/balance-check",
+  "endpointUrl": "https://mygift.giftcardmall.com",
   "formFields": {
     "cardNumber": "cardNumber",
     "expiryMonth": "expMonth",

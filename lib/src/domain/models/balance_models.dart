@@ -12,7 +12,14 @@ class BalanceResult {
   final DateTime fetchedAt;
 }
 
-enum RefreshFailureReason { network, parseError, rateLimited, offline, unknown }
+enum RefreshFailureReason {
+  network,
+  parseError,
+  rateLimited,
+  offline,
+  botProtection,
+  unknown,
+}
 
 class RefreshFailure {
   const RefreshFailure({
