@@ -87,8 +87,8 @@ final cardsControllerProvider =
 
 final sortedCardsProvider = Provider<List<VaultCard>>((ref) {
   final cards = ref.watch(cardsControllerProvider).valueOrNull ?? const [];
-  final settings = ref.watch(settingsControllerProvider).valueOrNull ??
-      const AppSettings();
+  final settings =
+      ref.watch(settingsControllerProvider).valueOrNull ?? const AppSettings();
   return sortCards(cards, settings.sortOption);
 });
 
@@ -239,14 +239,20 @@ class CardsController extends AsyncNotifier<List<VaultCard>> {
 
   Future<RefreshOutcome> refreshCard(String id) async {
     final service = ref.watch(balanceServiceProvider);
-    final settings =
-        ref.watch(settingsControllerProvider).valueOrNull ?? const AppSettings();
+    final settings = ref.watch(settingsControllerProvider).valueOrNull ??
+        const AppSettings();
     final outcome = await service.refreshCard(
       id,
       preferences: settings.notificationPreferences,
     );
     state = AsyncData(await ref.watch(cardRepositoryProvider).getCards());
     return outcome;
+  }
+
+  Future<void> applyForegroundRefresh(String id, BalanceResult result) async {
+    final repository = ref.watch(cardRepositoryProvider);
+    await repository.applyBalanceResult(id, result);
+    state = AsyncData(await repository.getCards());
   }
 
   Future<CardCredentials> getCredentials(String id) {
@@ -309,7 +315,8 @@ class RevealController extends AutoDisposeFamilyNotifier<RevealState, String> {
     final credentials =
         await ref.watch(cardRepositoryProvider).getCredentials(_cardId);
     state = RevealState(
-      revealedNumber: showNumber ? credentials.cardNumber : state.revealedNumber,
+      revealedNumber:
+          showNumber ? credentials.cardNumber : state.revealedNumber,
       revealedPin: showPin ? credentials.pin : state.revealedPin,
       isAuthenticating: false,
     );

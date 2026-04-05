@@ -4,6 +4,7 @@ import 'package:vaultcard/src/presentation/screens/add_card_screen.dart';
 import 'package:vaultcard/src/presentation/screens/card_detail_screen.dart';
 import 'package:vaultcard/src/presentation/screens/card_entry_form_screen.dart';
 import 'package:vaultcard/src/presentation/screens/card_list_screen.dart';
+import 'package:vaultcard/src/presentation/screens/gift_card_mall_refresh_screen.dart';
 import 'package:vaultcard/src/presentation/screens/onboarding_screen.dart';
 import 'package:vaultcard/src/presentation/screens/scan_card_screen.dart';
 import 'package:vaultcard/src/presentation/screens/settings_screen.dart';
@@ -43,6 +44,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/card/:id',
         builder: (context, state) => CardDetailScreen(
+          cardId: state.pathParameters['id']!,
+        ),
+      ),
+      GoRoute(
+        path: '/card/:id/giftcardmall',
+        builder: (context, state) => GiftCardMallRefreshScreen(
           cardId: state.pathParameters['id']!,
         ),
       ),

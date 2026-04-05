@@ -122,6 +122,12 @@ class CardDetailScreen extends ConsumerWidget {
                   const SizedBox(height: 12),
                   Text('Expires ${card.expiry}'),
                   Text('Last updated ${formatDateTime(card.lastFetchedAt)}'),
+                  const SizedBox(height: 16),
+                  FilledButton.tonalIcon(
+                    onPressed: () => context.push('/card/$cardId/giftcardmall'),
+                    icon: const Icon(Icons.open_in_browser_outlined),
+                    label: const Text('Refresh In GiftCardMall'),
+                  ),
                 ],
               ),
             ),
