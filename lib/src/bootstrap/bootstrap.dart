@@ -11,6 +11,7 @@ import 'package:vaultcard/src/data/storage/shared_preferences_app_preferences_st
 import 'package:vaultcard/src/data/storage/simple_secure_credential_store.dart';
 import 'package:vaultcard/src/providers/providers.dart';
 import 'package:vaultcard/src/services/app_lock_service.dart';
+import 'package:vaultcard/src/services/background_refresh_service.dart';
 import 'package:vaultcard/src/services/balance_service.dart';
 import 'package:vaultcard/src/services/biometric_service.dart';
 import 'package:vaultcard/src/services/connectivity_service.dart';
@@ -19,14 +20,16 @@ import 'package:vaultcard/src/services/scan_service.dart';
 import 'package:vaultcard/src/services/telemetry_service.dart';
 
 class Bootstrap {
-  const Bootstrap(this.overrides);
+  const Bootstrap(this.overrides, this.backgroundRefreshService);
 
   final List<Override> overrides;
+  final BackgroundRefreshService backgroundRefreshService;
 
   static Future<Bootstrap> create(SharedPreferences preferences) async {
     final metadataStore = await HiveCardMetadataStore.create();
     final appPreferencesStore = SharedPreferencesAppPreferencesStore(preferences);
     final notificationService = await NotificationService.create();
+    const backgroundRefreshService = BackgroundRefreshService();
     return Bootstrap(
       [
         metadataStoreProvider.overrideWithValue(metadataStore),
@@ -45,6 +48,9 @@ class Bootstrap {
           const NoOpTelemetryService(),
         ),
         notificationServiceProvider.overrideWithValue(notificationService),
+        backgroundRefreshServiceProvider.overrideWithValue(
+          backgroundRefreshService,
+        ),
         biometricServiceProvider.overrideWithValue(
           const BiometricService(),
         ),
@@ -71,6 +77,7 @@ class Bootstrap {
           ),
         ),
       ],
+      backgroundRefreshService,
     );
   }
 }

@@ -16,6 +16,7 @@ import 'package:vaultcard/src/domain/models/vault_card.dart';
 import 'package:vaultcard/src/domain/repositories/card_repository.dart';
 import 'package:vaultcard/src/domain/repositories/settings_repository.dart';
 import 'package:vaultcard/src/services/app_lock_service.dart';
+import 'package:vaultcard/src/services/background_refresh_service.dart';
 import 'package:vaultcard/src/services/balance_service.dart';
 import 'package:vaultcard/src/services/biometric_service.dart';
 import 'package:vaultcard/src/services/connectivity_service.dart';
@@ -52,6 +53,9 @@ final biometricServiceProvider = Provider<BiometricService>(
   (ref) => throw UnimplementedError(),
 );
 final appLockServiceProvider = Provider<AppLockService>(
+  (ref) => throw UnimplementedError(),
+);
+final backgroundRefreshServiceProvider = Provider<BackgroundRefreshService>(
   (ref) => throw UnimplementedError(),
 );
 final scanServiceProvider = Provider<ScanService>(
@@ -210,6 +214,12 @@ class CardsController extends AsyncNotifier<List<VaultCard>> {
   Future<String> addCard(CardInput input) async {
     final repository = ref.watch(cardRepositoryProvider);
     final id = await repository.addCard(input);
+    final cards = await repository.getCards();
+    final cardIndex = cards.indexWhere((card) => card.id == id);
+    await ref.watch(backgroundRefreshServiceProvider).registerCardRefresh(
+          id,
+          initialDelay: Duration(seconds: cardIndex < 0 ? 0 : cardIndex * 2),
+        );
     state = AsyncData(await repository.getCards());
     return id;
   }
@@ -223,6 +233,7 @@ class CardsController extends AsyncNotifier<List<VaultCard>> {
   Future<void> deleteCard(String id) async {
     final repository = ref.watch(cardRepositoryProvider);
     await repository.deleteCard(id);
+    await ref.watch(backgroundRefreshServiceProvider).cancelCardRefresh(id);
     state = AsyncData(await repository.getCards());
   }
 
