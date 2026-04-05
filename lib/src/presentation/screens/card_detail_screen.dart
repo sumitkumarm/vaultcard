@@ -26,6 +26,7 @@ class CardDetailScreen extends ConsumerWidget {
         title: Text(card.displayName),
         actions: [
           IconButton(
+            tooltip: 'Refresh balance',
             onPressed: () async {
               final outcome = await ref
                   .read(cardsControllerProvider.notifier)
@@ -45,6 +46,7 @@ class CardDetailScreen extends ConsumerWidget {
             icon: const Icon(Icons.refresh),
           ),
           PopupMenuButton<String>(
+            tooltip: 'Card actions',
             onSelected: (value) async {
               if (value != 'delete') {
                 return;
