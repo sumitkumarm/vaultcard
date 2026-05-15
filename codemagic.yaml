@@ -9,9 +9,15 @@ workflows:
     scripts:
       - name: Get dependencies
         script: flutter pub get
+      - name: Install iOS pods
+        script: |
+          cd ios
+          pod install --repo-update
+          ruby -e 'Dir.glob("Pods/Target Support Files/Pods-Runner/Pods-Runner*.xcconfig"){|p| s=File.read(p).gsub(/ -l"?Pods-Runner"?/,"").gsub(/ -framework "?Pods_Runner"?/,""); File.write(p,s)}'
+          grep -R "Pods-Runner\\|Pods_Runner" "Pods/Target Support Files/Pods-Runner" || true
       - name: Build iOS simulator app
         script: |
-          flutter build ios --simulator --debug -v
+          flutter build ios --simulator --debug --no-codesign -v
       - name: Zip Appetize artifact
         script: |
           cd build/ios/iphonesimulator

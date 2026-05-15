@@ -37,6 +37,15 @@ target 'Runner' do
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 end
 
+def strip_stale_runner_pods_linker_flags
+  Dir.glob(File.join(__dir__, 'Pods/Target Support Files/Pods-Runner/Pods-Runner*.xcconfig')).each do |path|
+    contents = File.read(path)
+    contents = contents.gsub(/ -l"?Pods-Runner"?/, '')
+    contents = contents.gsub(/ -framework "?Pods_Runner"?/, '')
+    File.write(path, contents)
+  end
+end
+
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
@@ -44,9 +53,9 @@ post_install do |installer|
 
   # Xcode 26/CocoaPods can leave the Runner target linking a non-emitted
   # aggregate libPods-Runner.a even though each plugin pod is linked directly.
-  Dir.glob(File.join(__dir__, 'Pods/Target Support Files/Pods-Runner/Pods-Runner*.xcconfig')).each do |path|
-    contents = File.read(path)
-    contents = contents.gsub(/ -l"?Pods-Runner"?/, '')
-    File.write(path, contents)
-  end
+  strip_stale_runner_pods_linker_flags
+end
+
+post_integrate do |_installer|
+  strip_stale_runner_pods_linker_flags
 end
