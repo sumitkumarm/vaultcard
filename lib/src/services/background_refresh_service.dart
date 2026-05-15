@@ -8,7 +8,6 @@ class BackgroundRefreshService {
   Future<void> initialize(void Function() callbackDispatcher) async {
     await Workmanager().initialize(
       callbackDispatcher,
-      isInDebugMode: false,
     );
   }
 
@@ -25,7 +24,7 @@ class BackgroundRefreshService {
       constraints: Constraints(
         networkType: NetworkType.connected,
       ),
-      existingWorkPolicy: ExistingWorkPolicy.update,
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
       backoffPolicy: BackoffPolicy.exponential,
       backoffPolicyDelay: const Duration(hours: 1),
     );

@@ -1,6 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-import 'package:flutter_native_timezone/flutter_native_timezone.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz;
@@ -25,8 +25,8 @@ void backgroundRefreshCallbackDispatcher() {
     WidgetsFlutterBinding.ensureInitialized();
     await Hive.initFlutter();
     tz.initializeTimeZones();
-    final timezoneName = await FlutterNativeTimezone.getLocalTimezone();
-    tz.setLocalLocation(tz.getLocation(timezoneName));
+    final timezoneInfo = await FlutterTimezone.getLocalTimezone();
+    tz.setLocalLocation(tz.getLocation(timezoneInfo.identifier));
 
     final metadataStore = await HiveCardMetadataStore.create();
     final preferences = await SharedPreferences.getInstance();
