@@ -36,7 +36,7 @@ class AddCardScreen extends StatelessWidget {
               child: ListTile(
                 leading: const Icon(Icons.keyboard_alt_outlined),
                 title: const Text('Enter Manually'),
-                subtitle: const Text('Type card number, expiry, CVV, and PIN'),
+                subtitle: const Text('Type card number, expiry, and CVV'),
                 onTap: () => context.push('/add/form'),
               ),
             ),

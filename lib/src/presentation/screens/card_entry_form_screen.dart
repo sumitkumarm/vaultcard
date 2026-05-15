@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:vaultcard/src/domain/models/card_input.dart';
@@ -25,7 +26,6 @@ class _CardEntryFormScreenState extends ConsumerState<CardEntryFormScreen> {
   late final TextEditingController _cardController;
   late final TextEditingController _expiryController;
   late final TextEditingController _cvvController;
-  late final TextEditingController _pinController;
   late final TextEditingController _nicknameController;
   CardNetwork _network = CardNetwork.unknown;
 
@@ -33,9 +33,10 @@ class _CardEntryFormScreenState extends ConsumerState<CardEntryFormScreen> {
   void initState() {
     super.initState();
     _cardController = TextEditingController(text: widget.prefill['cardNumber']);
-    _expiryController = TextEditingController(text: widget.prefill['expiry']);
+    _expiryController = TextEditingController(
+      text: formatExpiryInput(widget.prefill['expiry'] ?? ''),
+    );
     _cvvController = TextEditingController(text: widget.prefill['cvv']);
-    _pinController = TextEditingController();
     _nicknameController = TextEditingController();
     _cardController.addListener(() {
       setState(() {
@@ -52,7 +53,6 @@ class _CardEntryFormScreenState extends ConsumerState<CardEntryFormScreen> {
     _cardController.dispose();
     _expiryController.dispose();
     _cvvController.dispose();
-    _pinController.dispose();
     _nicknameController.dispose();
     super.dispose();
   }
@@ -69,7 +69,17 @@ class _CardEntryFormScreenState extends ConsumerState<CardEntryFormScreen> {
             children: [
               TextFormField(
                 controller: _cardController,
-                decoration: const InputDecoration(labelText: 'Card Number'),
+                decoration: InputDecoration(
+                  labelText: 'Card Number',
+                  suffixIcon: Padding(
+                    padding: const EdgeInsetsDirectional.only(end: 12),
+                    child: _NetworkBadge(network: _network),
+                  ),
+                  suffixIconConstraints: const BoxConstraints(
+                    minWidth: 72,
+                    minHeight: 40,
+                  ),
+                ),
                 keyboardType: TextInputType.number,
                 validator: (value) => validateCardNumber(value ?? ''),
               ),
@@ -82,6 +92,7 @@ class _CardEntryFormScreenState extends ConsumerState<CardEntryFormScreen> {
                       decoration:
                           const InputDecoration(labelText: 'Expiry (MM/YY)'),
                       keyboardType: TextInputType.datetime,
+                      inputFormatters: const [_ExpiryTextInputFormatter()],
                       validator: (value) => validateExpiry(value ?? ''),
                     ),
                   ),
@@ -98,33 +109,6 @@ class _CardEntryFormScreenState extends ConsumerState<CardEntryFormScreen> {
               ),
               const SizedBox(height: 16),
               TextFormField(
-                controller: _pinController,
-                decoration: const InputDecoration(labelText: 'PIN'),
-                obscureText: true,
-                keyboardType: TextInputType.number,
-                validator: (value) => validatePin(value ?? ''),
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<CardNetwork>(
-                initialValue: _network == CardNetwork.unknown ? null : _network,
-                decoration: const InputDecoration(labelText: 'Network'),
-                items: CardNetwork.values
-                    .where((network) => network != CardNetwork.unknown)
-                    .map(
-                      (network) => DropdownMenuItem(
-                        value: network,
-                        child: Text(network.name.toUpperCase()),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) =>
-                    setState(() => _network = value ?? CardNetwork.unknown),
-                validator: (value) => value == null || value == CardNetwork.unknown
-                    ? 'Select a network'
-                    : null,
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
                 controller: _nicknameController,
                 decoration:
                     const InputDecoration(labelText: 'Nickname (optional)'),
@@ -136,13 +120,13 @@ class _CardEntryFormScreenState extends ConsumerState<CardEntryFormScreen> {
                   if (!_formKey.currentState!.validate()) {
                     return;
                   }
+                  final cardNumber =
+                      _cardController.text.replaceAll(RegExp(r'\s+'), '');
                   final input = CardInput(
-                    cardNumber:
-                        _cardController.text.replaceAll(RegExp(r'\s+'), ''),
+                    cardNumber: cardNumber,
                     expiry: _expiryController.text.trim(),
                     cvv: _cvvController.text.trim(),
-                    pin: _pinController.text.trim(),
-                    network: _network,
+                    network: inferNetwork(cardNumber),
                     nickname: _nicknameController.text.trim(),
                   );
                   final id =
@@ -160,6 +144,130 @@ class _CardEntryFormScreenState extends ConsumerState<CardEntryFormScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _NetworkBadge extends StatelessWidget {
+  const _NetworkBadge({required this.network});
+
+  final CardNetwork network;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 150),
+      child: switch (network) {
+        CardNetwork.visa => const _VisaBadge(key: ValueKey('visa')),
+        CardNetwork.mastercard =>
+          const _MastercardBadge(key: ValueKey('mastercard')),
+        CardNetwork.unknown => const Icon(
+            Icons.credit_card,
+            key: ValueKey('unknown'),
+          ),
+      },
+    );
+  }
+}
+
+class _VisaBadge extends StatelessWidget {
+  const _VisaBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      widthFactor: 1,
+      child: Container(
+        width: 56,
+        height: 32,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: Colors.black12),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: const Text(
+          'VISA',
+          style: TextStyle(
+            color: Color(0xFF1A1F71),
+            fontSize: 15,
+            fontWeight: FontWeight.w900,
+            fontStyle: FontStyle.italic,
+            letterSpacing: 0,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MastercardBadge extends StatelessWidget {
+  const _MastercardBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      widthFactor: 1,
+      child: Container(
+        width: 56,
+        height: 32,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: Colors.black12),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Transform.translate(
+              offset: const Offset(-8, 0),
+              child: Container(
+                width: 21,
+                height: 21,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFEB001B),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+            Transform.translate(
+              offset: const Offset(8, 0),
+              child: Container(
+                width: 21,
+                height: 21,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFF79E1B),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+            Container(
+              width: 15,
+              height: 21,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF5F00).withValues(alpha: 0.72),
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ExpiryTextInputFormatter extends TextInputFormatter {
+  const _ExpiryTextInputFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final formatted = formatExpiryInput(newValue.text);
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
     );
   }
 }

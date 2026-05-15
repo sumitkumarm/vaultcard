@@ -154,16 +154,6 @@ class CardDetailScreen extends ConsumerWidget {
                         .read(revealControllerProvider(cardId).notifier)
                         .revealCardNumber(),
                   ),
-                  const SizedBox(height: 12),
-                  _SensitiveRow(
-                    label: 'PIN',
-                    value: revealState.revealedPin ?? '****',
-                    actionLabel: 'Reveal',
-                    isBusy: revealState.isAuthenticating,
-                    onPressed: () => ref
-                        .read(revealControllerProvider(cardId).notifier)
-                        .revealPin(),
-                  ),
                 ],
               ),
             ),

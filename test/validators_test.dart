@@ -11,4 +11,11 @@ void main() {
     expect(validateExpiry('05/27'), isNull);
     expect(validateExpiry('5/2027'), isNotNull);
   });
+
+  test('formats expiry digits while typing', () {
+    expect(formatExpiryInput('0'), '0');
+    expect(formatExpiryInput('0527'), '05/27');
+    expect(formatExpiryInput('05/27'), '05/27');
+    expect(formatExpiryInput('05-2027'), '05/20');
+  });
 }

@@ -6,8 +6,8 @@ class CardInput {
     required this.cardNumber,
     required this.expiry,
     required this.cvv,
-    required this.pin,
     required this.network,
+    this.pin = '',
     this.nickname,
   });
 

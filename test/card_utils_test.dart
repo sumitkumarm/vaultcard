@@ -9,11 +9,23 @@ void main() {
     });
 
     test('detects mastercard 51 range', () {
-      expect(inferNetwork('5111111111111111'), CardNetwork.mastercard);
+      expect(inferNetwork('5555555555554444'), CardNetwork.mastercard);
     });
 
     test('detects mastercard 2-series range', () {
       expect(inferNetwork('2221000000000009'), CardNetwork.mastercard);
+    });
+  });
+
+  group('isValidCardNumber', () {
+    test('accepts valid supported network numbers', () {
+      expect(isValidCardNumber('4111 1111 1111 1111'), isTrue);
+      expect(isValidCardNumber('5555 5555 5555 4444'), isTrue);
+    });
+
+    test('rejects unsupported or failed checksum numbers', () {
+      expect(isValidCardNumber('371449635398431'), isFalse);
+      expect(isValidCardNumber('4111111111111112'), isFalse);
     });
   });
 

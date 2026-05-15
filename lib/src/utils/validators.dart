@@ -1,7 +1,8 @@
+import 'package:vaultcard/src/utils/card_utils.dart';
+
 String? validateCardNumber(String value) {
-  final sanitized = value.replaceAll(RegExp(r'[\s-]'), '');
-  if (sanitized.length != 16 || int.tryParse(sanitized) == null) {
-    return 'Enter a valid 16-digit card number.';
+  if (!isValidCardNumber(value)) {
+    return 'Enter a valid Visa or Mastercard number.';
   }
   return null;
 }
@@ -12,6 +13,15 @@ String? validateExpiry(String value) {
     return 'Use MM/YY.';
   }
   return null;
+}
+
+String formatExpiryInput(String value) {
+  final digits = value.replaceAll(RegExp(r'\D'), '');
+  final trimmed = digits.length > 4 ? digits.substring(0, 4) : digits;
+  if (trimmed.length <= 2) {
+    return trimmed;
+  }
+  return '${trimmed.substring(0, 2)}/${trimmed.substring(2)}';
 }
 
 String? validateCvv(String value) {

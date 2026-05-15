@@ -2,22 +2,47 @@ import 'package:intl/intl.dart';
 import 'package:vaultcard/src/domain/models/vault_card.dart';
 
 CardNetwork inferNetwork(String cardNumber) {
-  if (cardNumber.startsWith('4')) {
+  final sanitized = cardNumber.replaceAll(RegExp(r'[\s-]'), '');
+  if (sanitized.startsWith('4')) {
     return CardNetwork.visa;
   }
-  if (cardNumber.length >= 2) {
-    final firstTwo = int.tryParse(cardNumber.substring(0, 2));
+  if (sanitized.length >= 2) {
+    final firstTwo = int.tryParse(sanitized.substring(0, 2));
     if (firstTwo != null && firstTwo >= 51 && firstTwo <= 55) {
       return CardNetwork.mastercard;
     }
   }
-  if (cardNumber.length >= 4) {
-    final firstFour = int.tryParse(cardNumber.substring(0, 4));
+  if (sanitized.length >= 4) {
+    final firstFour = int.tryParse(sanitized.substring(0, 4));
     if (firstFour != null && firstFour >= 2221 && firstFour <= 2720) {
       return CardNetwork.mastercard;
     }
   }
   return CardNetwork.unknown;
+}
+
+bool isValidCardNumber(String cardNumber) {
+  final sanitized = cardNumber.replaceAll(RegExp(r'[\s-]'), '');
+  if (sanitized.length != 16 || int.tryParse(sanitized) == null) {
+    return false;
+  }
+  if (inferNetwork(sanitized) == CardNetwork.unknown) {
+    return false;
+  }
+  var sum = 0;
+  var doubleDigit = false;
+  for (var i = sanitized.length - 1; i >= 0; i--) {
+    var digit = int.parse(sanitized[i]);
+    if (doubleDigit) {
+      digit *= 2;
+      if (digit > 9) {
+        digit -= 9;
+      }
+    }
+    sum += digit;
+    doubleDigit = !doubleDigit;
+  }
+  return sum % 10 == 0;
 }
 
 String maskCardNumber(String cardNumber) {
