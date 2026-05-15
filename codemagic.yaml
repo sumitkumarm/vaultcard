@@ -10,7 +10,8 @@ workflows:
       - name: Get dependencies
         script: flutter pub get
       - name: Build iOS simulator app
-        script: flutter build ios --simulator --debug
+        script: |
+          flutter build ios --simulator --debug -v
       - name: Zip Appetize artifact
         script: |
           cd build/ios/iphonesimulator
