@@ -689,8 +689,11 @@ final class NotificationService: NSObject, NotificationScheduling, UNUserNotific
 
 final class BackgroundRefreshService: BackgroundRefreshRegistering {
     static let taskIdentifier = "com.vaultcard.ios.stale-check"
+    private static var didRegister = false
 
     func register() {
+        guard !Self.didRegister else { return }
+        Self.didRegister = true
         BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.taskIdentifier, using: nil) { task in
             task.expirationHandler = { task.setTaskCompleted(success: false) }
             task.setTaskCompleted(success: true)
@@ -1131,7 +1134,6 @@ final class AppModel {
     }
 
     func start() async {
-        environment.backgroundRefresh.register()
         environment.backgroundRefresh.scheduleStaleCheck()
         await environment.notificationService.requestAuthorization()
         reloadCards()
@@ -1249,6 +1251,10 @@ enum Route: Hashable {
 
 @main
 struct VaultCardApp: App {
+    init() {
+        BackgroundRefreshService().register()
+    }
+
     var body: some Scene {
         WindowGroup {
             BootstrapView()
