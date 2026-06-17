@@ -1,0 +1,111 @@
+name: Native iOS Appetize
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Build, Test, and Deploy Native iOS to Appetize
+    runs-on: macos-latest
+    timeout-minutes: 35
+    env:
+      APPETIZE_API_TOKEN: ${{ secrets.APPETIZE_API_TOKEN }}
+      APPETIZE_APP_PUBLIC_KEY: ${{ secrets.APPETIZE_APP_PUBLIC_KEY }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcrun simctl list devices available
+
+      - name: Select simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEVICE_UDID="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone 16|iPhone 15|iPhone 14/ { print $2; exit }')"
+          if [[ -z "${DEVICE_UDID}" ]]; then
+            echo "No suitable iPhone simulator found." >&2
+            exit 1
+          fi
+          echo "destination=platform=iOS Simulator,id=${DEVICE_UDID}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and test
+        run: |
+          xcodebuild \
+            -project ios-native/VaultCard.xcodeproj \
+            -scheme VaultCard \
+            -destination '${{ steps.simulator.outputs.destination }}' \
+            -derivedDataPath build/native-ios-derived-data \
+            clean build test
+
+      - name: Zip Appetize simulator artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="build/native-ios-derived-data/Build/Products/Debug-iphonesimulator/VaultCard.app"
+          if [[ ! -d "${APP_PATH}" ]]; then
+            echo "Expected simulator app was not produced at ${APP_PATH}" >&2
+            exit 1
+          fi
+          mkdir -p build/appetize
+          ditto -c -k --keepParent "${APP_PATH}" build/appetize/VaultCard-ios-native-simulator.zip
+
+      - name: Upload simulator artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VaultCard-ios-native-simulator
+          path: build/appetize/VaultCard-ios-native-simulator.zip
+          if-no-files-found: error
+
+      - name: Verify Appetize credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${APPETIZE_API_TOKEN}" ]]; then
+            echo "APPETIZE_API_TOKEN is not configured as a GitHub Actions secret." >&2
+            exit 1
+          fi
+
+      - name: Upload to Appetize
+        id: appetize
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_PATH="build/appetize/VaultCard-ios-native-simulator.zip"
+          NOTE="VaultCard native iOS ${GITHUB_SHA}"
+
+          if [[ -n "${APPETIZE_APP_PUBLIC_KEY}" ]]; then
+            RESPONSE="$(curl --fail-with-body --silent --show-error \
+              --request POST "https://api.appetize.io/v1/apps/${APPETIZE_APP_PUBLIC_KEY}" \
+              --header "X-API-KEY: ${APPETIZE_API_TOKEN}" \
+              --form "file=@${ZIP_PATH}" \
+              --form "platform=ios" \
+              --form "fileType=zip" \
+              --form "note=${NOTE}")"
+          else
+            RESPONSE="$(curl --fail-with-body --silent --show-error \
+              --request POST "https://api.appetize.io/v1/apps" \
+              --header "X-API-KEY: ${APPETIZE_API_TOKEN}" \
+              --form "file=@${ZIP_PATH}" \
+              --form "platform=ios" \
+              --form "fileType=zip" \
+              --form "note=${NOTE}")"
+          fi
+
+          PUBLIC_KEY="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["publicKey"])' <<< "${RESPONSE}")"
+          echo "public_key=${PUBLIC_KEY}" >> "$GITHUB_OUTPUT"
+          echo "preview_url=https://appetize.io/app/${PUBLIC_KEY}" >> "$GITHUB_OUTPUT"
+          echo "Appetize preview: https://appetize.io/app/${PUBLIC_KEY}"
+
+      - name: Deployment summary
+        run: |
+          {
+            echo "## Native iOS Appetize Deployment"
+            echo ""
+            echo "- Appetize preview: https://appetize.io/app/${{ steps.appetize.outputs.public_key }}"
+            echo "- Source SHA: ${GITHUB_SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"

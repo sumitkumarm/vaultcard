@@ -34,3 +34,11 @@ xcodebuild \
   - `rg -n "@Query|modelContext" ios-native/VaultCard ios-native/VaultCardTests ios-native/VaultCardUITests` returned no matches.
   - Keychain API references are isolated to `KeychainCredentialStore` in `VaultCardApp.swift`.
 - No Flutter source files were modified.
+
+## Appetize Deployment Gate
+
+- Added `.github/workflows/native-ios-appetize.yml` as a manual deployment gate for the native iOS app.
+- The workflow runs the native Xcode build/test gate, packages `VaultCard.app` as `VaultCard-ios-native-simulator.zip`, uploads the zip as a GitHub Actions artifact, and then uploads the same simulator artifact to Appetize.
+- Appetize upload uses the official REST API with `X-API-KEY`, `platform=ios`, and `fileType=zip`. If `APPETIZE_APP_PUBLIC_KEY` is configured, the workflow updates that existing app; otherwise it creates a new Appetize app and reports the generated preview URL.
+- Required GitHub Actions secret: `APPETIZE_API_TOKEN`.
+- Optional GitHub Actions secret: `APPETIZE_APP_PUBLIC_KEY`.
