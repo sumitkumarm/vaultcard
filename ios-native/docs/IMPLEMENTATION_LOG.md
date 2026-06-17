@@ -28,6 +28,7 @@ xcodebuild \
 - GitHub Actions run `27706449171` reached simulator testing but failed because `BGTaskScheduler` was registered from SwiftUI `.task` after app launch completed. Fixed by registering the launch handler from `VaultCardApp.init()` and leaving only best-effort scheduling in async app startup.
 - GitHub Actions run `27706857825` passed app launch/UI testing and exposed a brittle rollback unit test. Fixed by adding a deterministic repository metadata-save failure hook and testing Keychain rollback through that path instead of depending on SwiftData unique-constraint timing.
 - GitHub Actions run `27707134236` passed the native build/test gate. Added deterministic `--ui-testing` app environment and expanded UI tests for onboarding, manual add, reveal, delete, and validation failure paths.
+- GitHub Actions run `27707380211` proved the manual add/reveal/delete path worked but failed on a brittle assertion that SwiftUI exposed the `Sensitive Details` section header as a static text. Updated the UI test to assert the reveal control and masked value instead.
 - Static validation run locally against source/test directories:
   - `rg -n "TODO|fatalError|try!|print\(|debugPrint" ios-native/VaultCard ios-native/VaultCardTests ios-native/VaultCardUITests` returned no matches.
   - `rg -n "@Query|modelContext" ios-native/VaultCard ios-native/VaultCardTests ios-native/VaultCardUITests` returned no matches.

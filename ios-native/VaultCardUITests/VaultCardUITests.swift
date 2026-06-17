@@ -46,7 +46,7 @@ final class VaultCardUITests: XCTestCase {
 
         app.buttons["manual.save"].tap()
 
-        XCTAssertTrue(app.staticTexts["Sensitive Details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["detail.reveal"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["**** **** **** 1111"].waitForExistence(timeout: 5))
 
         app.buttons["detail.reveal"].tap()
