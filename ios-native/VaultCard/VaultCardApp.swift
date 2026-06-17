@@ -454,12 +454,20 @@ final class SwiftDataCardRepository: CardRepository {
     private let credentialStore: CredentialStore
     private let now: () -> Date
     private let uuid: () -> String
+    private let beforeMetadataSave: (() throws -> Void)?
 
-    init(context: ModelContext, credentialStore: CredentialStore, now: @escaping () -> Date = Date.init, uuid: @escaping () -> String = { UUID().uuidString }) {
+    init(
+        context: ModelContext,
+        credentialStore: CredentialStore,
+        now: @escaping () -> Date = Date.init,
+        uuid: @escaping () -> String = { UUID().uuidString },
+        beforeMetadataSave: (() throws -> Void)? = nil
+    ) {
         self.context = context
         self.credentialStore = credentialStore
         self.now = now
         self.uuid = uuid
+        self.beforeMetadataSave = beforeMetadataSave
     }
 
     func getCards() throws -> [VaultCard] {
@@ -493,6 +501,7 @@ final class SwiftDataCardRepository: CardRepository {
                 credentialVersion: 1
             )
             context.insert(SchemaV1.CardMetadataRecord(card: card))
+            try beforeMetadataSave?()
             try context.save()
             return cardID
         } catch {

@@ -48,26 +48,12 @@ final class VaultCardTests: XCTestCase {
         let repository = SwiftDataCardRepository(
             context: context,
             credentialStore: store,
-            uuid: { "fixed-id" }
+            uuid: { "rollback-id" },
+            beforeMetadataSave: { throw VaultError.validation("forced metadata failure") }
         )
-        context.insert(SchemaV1.CardMetadataRecord(card: VaultCard(
-            id: "fixed-id",
-            nickname: "Existing",
-            network: .visa,
-            last4: "1111",
-            expiry: "09/29",
-            balance: nil,
-            transactions: [],
-            lastFetchedAt: nil,
-            fetchFailureCount: 0,
-            addedAt: Date(),
-            refreshBlockedUntil: nil,
-            credentialVersion: 1
-        )))
-        try context.save()
 
         XCTAssertThrowsError(try repository.addCard(validInput()))
-        XCTAssertNil(store.records["fixed-id"])
+        XCTAssertNil(store.records["rollback-id"])
     }
 
     func testRepositorySurfacesMissingCredentialState() throws {

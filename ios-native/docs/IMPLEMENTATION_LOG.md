@@ -26,6 +26,7 @@ xcodebuild \
   - `list_sims` failed with `spawn xcrun ENOENT`.
 - Added `.github/workflows/native-ios.yml` so GitHub Actions can run the native iOS build/test gate on `macos-latest` using an available iPhone simulator.
 - GitHub Actions run `27706449171` reached simulator testing but failed because `BGTaskScheduler` was registered from SwiftUI `.task` after app launch completed. Fixed by registering the launch handler from `VaultCardApp.init()` and leaving only best-effort scheduling in async app startup.
+- GitHub Actions run `27706857825` passed app launch/UI testing and exposed a brittle rollback unit test. Fixed by adding a deterministic repository metadata-save failure hook and testing Keychain rollback through that path instead of depending on SwiftData unique-constraint timing.
 - Static validation run locally against source/test directories:
   - `rg -n "TODO|fatalError|try!|print\(|debugPrint" ios-native/VaultCard ios-native/VaultCardTests ios-native/VaultCardUITests` returned no matches.
   - `rg -n "@Query|modelContext" ios-native/VaultCard ios-native/VaultCardTests ios-native/VaultCardUITests` returned no matches.
