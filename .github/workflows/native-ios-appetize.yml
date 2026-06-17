@@ -1,6 +1,12 @@
 name: Native iOS Appetize
 
 on:
+  push:
+    branches:
+      - codex/native-ios-vaultcard
+    paths:
+      - "ios-native/**"
+      - ".github/workflows/native-ios-appetize.yml"
   workflow_dispatch:
 
 jobs:
