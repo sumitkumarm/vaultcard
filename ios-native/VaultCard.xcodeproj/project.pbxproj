@@ -1,0 +1,495 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		111111111111111111111101 /* VaultCardApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111001 /* VaultCardApp.swift */; };
+		111111111111111111111102 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111002 /* Assets.xcassets */; };
+		111111111111111111111103 /* VaultCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111003 /* VaultCardTests.swift */; };
+		111111111111111111111104 /* VaultCardUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111004 /* VaultCardUITests.swift */; };
+		111111111111111111111105 /* ParserConfig.json in Resources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111009 /* ParserConfig.json */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		111111111111111111111201 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 111111111111111111111301 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 111111111111111111111401;
+			remoteInfo = VaultCard;
+		};
+		111111111111111111111202 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 111111111111111111111301 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 111111111111111111111401;
+			remoteInfo = VaultCard;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		111111111111111111111001 /* VaultCardApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultCardApp.swift; sourceTree = "<group>"; };
+		111111111111111111111002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		111111111111111111111003 /* VaultCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultCardTests.swift; sourceTree = "<group>"; };
+		111111111111111111111004 /* VaultCardUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultCardUITests.swift; sourceTree = "<group>"; };
+		111111111111111111111005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		111111111111111111111006 /* VaultCard.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VaultCard.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		111111111111111111111007 /* VaultCardTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VaultCardTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		111111111111111111111008 /* VaultCardUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VaultCardUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		111111111111111111111009 /* ParserConfig.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = ParserConfig.json; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		111111111111111111111501 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		111111111111111111111502 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		111111111111111111111503 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		111111111111111111111601 = {
+			isa = PBXGroup;
+			children = (
+				111111111111111111111602 /* VaultCard */,
+				111111111111111111111603 /* VaultCardTests */,
+				111111111111111111111604 /* VaultCardUITests */,
+				111111111111111111111605 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		111111111111111111111602 /* VaultCard */ = {
+			isa = PBXGroup;
+			children = (
+				111111111111111111111001 /* VaultCardApp.swift */,
+				111111111111111111111005 /* Info.plist */,
+				111111111111111111111009 /* ParserConfig.json */,
+				111111111111111111111002 /* Assets.xcassets */,
+			);
+			path = VaultCard;
+			sourceTree = "<group>";
+		};
+		111111111111111111111603 /* VaultCardTests */ = {
+			isa = PBXGroup;
+			children = (
+				111111111111111111111003 /* VaultCardTests.swift */,
+			);
+			path = VaultCardTests;
+			sourceTree = "<group>";
+		};
+		111111111111111111111604 /* VaultCardUITests */ = {
+			isa = PBXGroup;
+			children = (
+				111111111111111111111004 /* VaultCardUITests.swift */,
+			);
+			path = VaultCardUITests;
+			sourceTree = "<group>";
+		};
+		111111111111111111111605 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				111111111111111111111006 /* VaultCard.app */,
+				111111111111111111111007 /* VaultCardTests.xctest */,
+				111111111111111111111008 /* VaultCardUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		111111111111111111111401 /* VaultCard */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 111111111111111111111901 /* Build configuration list for PBXNativeTarget "VaultCard" */;
+			buildPhases = (
+				111111111111111111111701 /* Sources */,
+				111111111111111111111501 /* Frameworks */,
+				111111111111111111111801 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VaultCard;
+			productName = VaultCard;
+			productReference = 111111111111111111111006 /* VaultCard.app */;
+			productType = "com.apple.product-type.application";
+		};
+		111111111111111111111402 /* VaultCardTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 111111111111111111111902 /* Build configuration list for PBXNativeTarget "VaultCardTests" */;
+			buildPhases = (
+				111111111111111111111702 /* Sources */,
+				111111111111111111111502 /* Frameworks */,
+				111111111111111111111802 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				111111111111111111111203 /* PBXTargetDependency */,
+			);
+			name = VaultCardTests;
+			productName = VaultCardTests;
+			productReference = 111111111111111111111007 /* VaultCardTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		111111111111111111111403 /* VaultCardUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 111111111111111111111903 /* Build configuration list for PBXNativeTarget "VaultCardUITests" */;
+			buildPhases = (
+				111111111111111111111703 /* Sources */,
+				111111111111111111111503 /* Frameworks */,
+				111111111111111111111803 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				111111111111111111111204 /* PBXTargetDependency */,
+			);
+			name = VaultCardUITests;
+			productName = VaultCardUITests;
+			productReference = 111111111111111111111008 /* VaultCardUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		111111111111111111111301 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					111111111111111111111401 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					111111111111111111111402 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = 111111111111111111111401;
+					};
+					111111111111111111111403 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = 111111111111111111111401;
+					};
+				};
+			};
+			buildConfigurationList = 111111111111111111111900 /* Build configuration list for PBXProject "VaultCard" */;
+			compatibilityVersion = "Xcode 15.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 111111111111111111111601;
+			productRefGroup = 111111111111111111111605 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				111111111111111111111401 /* VaultCard */,
+				111111111111111111111402 /* VaultCardTests */,
+				111111111111111111111403 /* VaultCardUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		111111111111111111111801 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				111111111111111111111102 /* Assets.xcassets in Resources */,
+				111111111111111111111105 /* ParserConfig.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		111111111111111111111802 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		111111111111111111111803 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		111111111111111111111701 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				111111111111111111111101 /* VaultCardApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		111111111111111111111702 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				111111111111111111111103 /* VaultCardTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		111111111111111111111703 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				111111111111111111111104 /* VaultCardUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		111111111111111111111203 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 111111111111111111111401 /* VaultCard */;
+			targetProxy = 111111111111111111111201 /* PBXContainerItemProxy */;
+		};
+		111111111111111111111204 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 111111111111111111111401 /* VaultCard */;
+			targetProxy = 111111111111111111111202 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		111111111111111111112001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		111111111111111111112002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		111111111111111111112003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = VaultCard/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vaultcard.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+			};
+			name = Debug;
+		};
+		111111111111111111112004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = VaultCard/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vaultcard.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+			};
+			name = Release;
+		};
+		111111111111111111112005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vaultcard.ios.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/VaultCard.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/VaultCard";
+			};
+			name = Debug;
+		};
+		111111111111111111112006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vaultcard.ios.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/VaultCard.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/VaultCard";
+			};
+			name = Release;
+		};
+		111111111111111111112007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vaultcard.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				TEST_TARGET_NAME = VaultCard;
+			};
+			name = Debug;
+		};
+		111111111111111111112008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vaultcard.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				TEST_TARGET_NAME = VaultCard;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		111111111111111111111900 /* Build configuration list for PBXProject "VaultCard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				111111111111111111112001 /* Debug */,
+				111111111111111111112002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		111111111111111111111901 /* Build configuration list for PBXNativeTarget "VaultCard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				111111111111111111112003 /* Debug */,
+				111111111111111111112004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		111111111111111111111902 /* Build configuration list for PBXNativeTarget "VaultCardTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				111111111111111111112005 /* Debug */,
+				111111111111111111112006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		111111111111111111111903 /* Build configuration list for PBXNativeTarget "VaultCardUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				111111111111111111112007 /* Debug */,
+				111111111111111111112008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 111111111111111111111301 /* Project object */;
+}

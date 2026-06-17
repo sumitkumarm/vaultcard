@@ -1,0 +1,47 @@
+name: Native iOS
+
+on:
+  push:
+    paths:
+      - "ios-native/**"
+      - ".github/workflows/native-ios.yml"
+  pull_request:
+    paths:
+      - "ios-native/**"
+      - ".github/workflows/native-ios.yml"
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    name: Build and Test Native iOS
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcrun simctl list devices available
+
+      - name: Select simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEVICE_UDID="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone 16|iPhone 15|iPhone 14/ { print $2; exit }')"
+          if [[ -z "${DEVICE_UDID}" ]]; then
+            echo "No suitable iPhone simulator found." >&2
+            exit 1
+          fi
+          echo "destination=platform=iOS Simulator,id=${DEVICE_UDID}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and test
+        run: |
+          xcodebuild \
+            -project ios-native/VaultCard.xcodeproj \
+            -scheme VaultCard \
+            -destination '${{ steps.simulator.outputs.destination }}' \
+            clean build test

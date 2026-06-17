@@ -1,0 +1,32 @@
+# Native iOS Implementation Log
+
+## Phase 1-7 Baseline Pass
+
+- Created separate native app scaffold under `ios-native/`.
+- Added SwiftUI app shell, routing, dependency container, SwiftData `SchemaV1`, placeholder `VaultCardSchemaMigrationPlan`, and in-memory model container factory.
+- Added manual vault, Keychain credential store, LocalAuthentication reveal/app lock, direct refresh shell, GiftCardMall WKWebView fallback, Vision/AVFoundation scan prefill, notification service, and BGTaskScheduler registration.
+- Added unit/UI tests covering validation, OCR parsing, repository atomicity paths, transaction persistence, and GiftCardMall fixture parsing.
+
+## Gate Status
+
+- Attempted required gate:
+
+```bash
+xcodebuild \
+  -project ios-native/VaultCard.xcodeproj \
+  -scheme VaultCard \
+  -destination 'platform=iOS Simulator,name=iPhone 16' \
+  clean build test
+```
+
+- Result in this environment: `xcodebuild` is unavailable on Windows (`CommandNotFoundException`), so native compilation and simulator tests could not be executed here.
+- XcodeBuildMCP validation was also attempted:
+  - `session_show_defaults` succeeded but showed no configured project/scheme/simulator defaults.
+  - `list_schemes` for `ios-native/VaultCard.xcodeproj` failed with `spawn xcodebuild ENOENT`.
+  - `list_sims` failed with `spawn xcrun ENOENT`.
+- Added `.github/workflows/native-ios.yml` so GitHub Actions can run the native iOS build/test gate on `macos-latest` using an available iPhone simulator.
+- Static validation run locally against source/test directories:
+  - `rg -n "TODO|fatalError|try!|print\(|debugPrint" ios-native/VaultCard ios-native/VaultCardTests ios-native/VaultCardUITests` returned no matches.
+  - `rg -n "@Query|modelContext" ios-native/VaultCard ios-native/VaultCardTests ios-native/VaultCardUITests` returned no matches.
+  - Keychain API references are isolated to `KeychainCredentialStore` in `VaultCardApp.swift`.
+- No Flutter source files were modified.
