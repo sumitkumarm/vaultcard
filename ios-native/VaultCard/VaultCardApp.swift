@@ -448,6 +448,31 @@ final class KeychainCredentialStore: CredentialStore {
     }
 }
 
+final class InMemoryCredentialStore: CredentialStore {
+    private var records: [String: CardCredentials] = [:]
+
+    func writeNew(_ credentials: CardCredentials, cardID: String) throws {
+        if records[cardID] != nil {
+            throw VaultError.duplicateCredential
+        }
+        records[cardID] = credentials
+    }
+
+    func update(_ credentials: CardCredentials, cardID: String) throws {
+        records[cardID] = credentials
+    }
+
+    func read(cardID: String, expiry: String) throws -> CardCredentials {
+        guard var credentials = records[cardID] else { throw VaultError.credentialUnavailable }
+        credentials.expiry = expiry
+        return credentials
+    }
+
+    func delete(cardID: String) throws {
+        records.removeValue(forKey: cardID)
+    }
+}
+
 @MainActor
 final class SwiftDataCardRepository: CardRepository {
     private let context: ModelContext
@@ -647,6 +672,15 @@ final class LocalAuthenticationService: BiometricAuthenticating {
     }
 }
 
+struct AlwaysAllowAuthenticationService: BiometricAuthenticating {
+    func authenticate(reason: String) async -> Bool { true }
+}
+
+struct NoopNotificationService: NotificationScheduling {
+    func requestAuthorization() async {}
+    func syncForCard(_ card: VaultCard, preferences: NotificationPreferences) async {}
+}
+
 final class NotificationService: NSObject, NotificationScheduling, UNUserNotificationCenterDelegate {
     private let center = UNUserNotificationCenter.current()
 
@@ -714,6 +748,11 @@ final class BackgroundRefreshService: BackgroundRefreshRegistering {
         request.earliestBeginDate = Date().addingTimeInterval(24 * 60 * 60)
         try? BGTaskScheduler.shared.submit(request)
     }
+}
+
+struct NoopBackgroundRefreshService: BackgroundRefreshRegistering {
+    func register() {}
+    func scheduleStaleCheck() {}
 }
 
 struct ParserConfig: Codable {
@@ -1070,6 +1109,16 @@ final class VisionCardScanner: CardScanning {
     }
 }
 
+struct StaticCardScanner: CardScanning {
+    func extractCandidates(from image: CGImage) async throws -> ScanCandidate {
+        extractCandidates(from: "4111 1111 1111 1111 exp: 09/29 cvv: 123")
+    }
+
+    func extractCandidates(from text: String) -> ScanCandidate {
+        VisionCardScanner().extractCandidates(from: text)
+    }
+}
+
 extension String {
     func firstMatch(_ pattern: String, group: Int = 0) -> String? {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
@@ -1120,6 +1169,29 @@ struct AppEnvironment {
             backgroundRefresh: BackgroundRefreshService()
         )
     }
+
+    static func uiTesting() throws -> AppEnvironment {
+        let container = try ModelContainerFactory.makeInMemory()
+        let context = ModelContext(container)
+        let notificationService = NoopNotificationService()
+        let cardRepository = SwiftDataCardRepository(context: context, credentialStore: InMemoryCredentialStore())
+        return AppEnvironment(
+            cardRepository: cardRepository,
+            settingsRepository: InMemorySettingsRepository(),
+            biometricService: AlwaysAllowAuthenticationService(),
+            notificationService: notificationService,
+            balanceService: BalanceService(repository: cardRepository, notifications: notificationService),
+            scanner: StaticCardScanner(),
+            backgroundRefresh: NoopBackgroundRefreshService()
+        )
+    }
+}
+
+final class InMemorySettingsRepository: SettingsRepository {
+    private var settings = AppSettings()
+
+    func load() -> AppSettings { settings }
+    func save(_ settings: AppSettings) { self.settings = settings }
 }
 
 @MainActor
@@ -1277,7 +1349,9 @@ struct BootstrapView: View {
 
     init() {
         do {
-            let environment = try AppEnvironment.live()
+            let environment = try ProcessInfo.processInfo.arguments.contains("--ui-testing")
+                ? AppEnvironment.uiTesting()
+                : AppEnvironment.live()
             _model = State(initialValue: AppModel(environment: environment))
             _startupError = State(initialValue: nil)
         } catch {
@@ -1374,6 +1448,7 @@ struct OnboardingView: View {
                     withAnimation { index += 1 }
                 }
             }
+            .accessibilityIdentifier("onboarding.primary")
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .padding()
@@ -1389,12 +1464,14 @@ struct CardListView: View {
             if model.sortedCards.isEmpty {
                 ContentUnavailableView("No cards yet", systemImage: "creditcard", description: Text("Add your first prepaid gift card to start tracking balances and expiry dates."))
                 Button("Add Your First Card") { model.routePath.append(.add) }
+                    .accessibilityIdentifier("cards.empty.add")
             } else {
                 Section {
                     ForEach(model.sortedCards) { card in
                         Button { model.routePath.append(.detail(card.id)) } label: {
                             CardRow(card: card)
                         }
+                        .accessibilityIdentifier("card.row.\(card.last4)")
                     }
                 } header: {
                     Text("Your Cards")
@@ -1422,6 +1499,7 @@ struct CardListView: View {
             }
             ToolbarItem(placement: .bottomBar) {
                 Button { model.routePath.append(.add) } label: { Label("Add Card", systemImage: "plus") }
+                    .accessibilityIdentifier("cards.add")
             }
         }
     }
@@ -1454,9 +1532,11 @@ struct AddCardChoiceView: View {
                 Button { model.routePath.append(.scan) } label: {
                     Label("Scan Card", systemImage: "doc.viewfinder")
                 }
+                .accessibilityIdentifier("add.scan")
                 Button { model.routePath.append(.manualEntry(prefill: nil)) } label: {
                     Label("Enter Manually", systemImage: "keyboard")
                 }
+                .accessibilityIdentifier("add.manual")
             } header: {
                 Text("Choose how to add your card")
             } footer: {
@@ -1486,12 +1566,16 @@ struct ManualCardEntryView: View {
             Section {
                 TextField("Card Number", text: $cardNumber)
                     .keyboardType(.numberPad)
+                    .accessibilityIdentifier("manual.cardNumber")
                 Text(CardRules.inferNetwork(cardNumber).displayName).foregroundStyle(.secondary)
                 TextField("Expiry (MM/YY)", text: Binding(get: { expiry }, set: { expiry = CardRules.formatExpiryInput($0) }))
                     .keyboardType(.numbersAndPunctuation)
+                    .accessibilityIdentifier("manual.expiry")
                 SecureField("CVV", text: $cvv)
                     .keyboardType(.numberPad)
+                    .accessibilityIdentifier("manual.cvv")
                 TextField("Nickname (optional)", text: $nickname)
+                    .accessibilityIdentifier("manual.nickname")
             }
             if let errorMessage {
                 Text(errorMessage).foregroundStyle(.red)
@@ -1504,6 +1588,7 @@ struct ManualCardEntryView: View {
                     errorMessage = error.localizedDescription
                 }
             }
+            .accessibilityIdentifier("manual.save")
         }
         .navigationTitle("Card Details")
     }
@@ -1550,6 +1635,7 @@ struct ScanCardView: View {
                     Button("Use Text Result") {
                         handle(model.scanText(fallbackText))
                     }
+                    .accessibilityIdentifier("scan.useText")
                 }
             }
         }
@@ -1683,6 +1769,7 @@ struct CardDetailView: View {
                                 }
                             }
                         }
+                        .accessibilityIdentifier("detail.reveal")
                     }
                 }
                 Section("Transactions") {
@@ -1709,9 +1796,11 @@ struct CardDetailView: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button { Task { model.alertMessage = describe(await model.refreshCard(id: cardID)) } } label: { Image(systemName: "arrow.clockwise") }
+                    .accessibilityIdentifier("detail.refresh")
                 Button(role: .destructive) {
                     confirmDelete = true
                 } label: { Image(systemName: "trash") }
+                .accessibilityIdentifier("detail.delete")
             }
         }
         .alert("Remove card?", isPresented: $confirmDelete) {
@@ -1719,6 +1808,7 @@ struct CardDetailView: View {
             Button("Delete", role: .destructive) {
                 do { try model.deleteCard(id: cardID) } catch { model.alertMessage = error.localizedDescription }
             }
+            .accessibilityIdentifier("detail.confirmDelete")
         } message: {
             Text("This removes the saved metadata and secure credentials from this device.")
         }
