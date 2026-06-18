@@ -43,3 +43,6 @@ xcodebuild \
 - Required GitHub Actions secret: `APPETIZE_API_TOKEN`.
 - Optional GitHub Actions variable: `APPETIZE_IOS_PUBLIC_KEY`.
 - GitHub Actions run `27726370417` passed the native build/test step, produced and uploaded the `VaultCard-ios-native-simulator` artifact, then failed at `Verify Appetize credentials` because `APPETIZE_API_TOKEN` was not configured in repository Actions secrets. `APPETIZE_APP_PUBLIC_KEY` was also empty.
+- GitHub Actions run `27735285387` passed the full native Appetize gate: Xcode build/test, simulator app zip packaging, GitHub artifact upload, credential verification, and Appetize upload.
+- Appetize iOS preview updated successfully at `https://appetize.io/app/menqwwjiw7wmvef57eeohiwrg4`.
+- Appetize smoke test passed in browser on iPhone 14 Pro / iOS 17.2: launched the native app, dismissed the notification permission prompt, completed onboarding to the vault list, opened the add-card choice screen, and opened the manual card entry form.
