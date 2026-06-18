@@ -12,6 +12,8 @@
 /android/app/release
 /build/
 /coverage/
+.env.local
+.env.*.local
 /ios/Flutter/.last_build_id
 /ios/Flutter/ephemeral/
 /ios/Pods/
