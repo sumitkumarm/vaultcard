@@ -37,9 +37,9 @@ xcodebuild \
 
 ## Appetize Deployment Gate
 
-- Added `.github/workflows/native-ios-appetize.yml` as a manual deployment gate for the native iOS app.
+- Added `.github/workflows/native-ios-appetize.yml` as a deployment gate for the native iOS app.
 - The workflow runs the native Xcode build/test gate, packages `VaultCard.app` as `VaultCard-ios-native-simulator.zip`, uploads the zip as a GitHub Actions artifact, and then uploads the same simulator artifact to Appetize.
-- Appetize upload uses the official REST API with `X-API-KEY`, `platform=ios`, and `fileType=zip`. If `APPETIZE_APP_PUBLIC_KEY` is configured, the workflow updates that existing app; otherwise it creates a new Appetize app and reports the generated preview URL.
+- Appetize upload uses the official REST API with `X-API-KEY`, `platform=ios`, and `fileType=zip`. If `APPETIZE_IOS_PUBLIC_KEY` is configured as a GitHub Actions variable, the workflow updates that existing app; otherwise it creates a new Appetize app and reports the generated preview URL.
 - Required GitHub Actions secret: `APPETIZE_API_TOKEN`.
-- Optional GitHub Actions secret: `APPETIZE_APP_PUBLIC_KEY`.
+- Optional GitHub Actions variable: `APPETIZE_IOS_PUBLIC_KEY`.
 - GitHub Actions run `27726370417` passed the native build/test step, produced and uploaded the `VaultCard-ios-native-simulator` artifact, then failed at `Verify Appetize credentials` because `APPETIZE_API_TOKEN` was not configured in repository Actions secrets. `APPETIZE_APP_PUBLIC_KEY` was also empty.

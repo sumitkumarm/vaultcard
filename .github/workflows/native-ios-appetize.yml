@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 35
     env:
       APPETIZE_API_TOKEN: ${{ secrets.APPETIZE_API_TOKEN }}
-      APPETIZE_APP_PUBLIC_KEY: ${{ secrets.APPETIZE_APP_PUBLIC_KEY }}
+      APPETIZE_IOS_PUBLIC_KEY: ${{ vars.APPETIZE_IOS_PUBLIC_KEY }}
 
     steps:
       - name: Check out repository
@@ -84,9 +84,9 @@ jobs:
           ZIP_PATH="build/appetize/VaultCard-ios-native-simulator.zip"
           NOTE="VaultCard native iOS ${GITHUB_SHA}"
 
-          if [[ -n "${APPETIZE_APP_PUBLIC_KEY}" ]]; then
+          if [[ -n "${APPETIZE_IOS_PUBLIC_KEY}" ]]; then
             RESPONSE="$(curl --fail-with-body --silent --show-error \
-              --request POST "https://api.appetize.io/v1/apps/${APPETIZE_APP_PUBLIC_KEY}" \
+              --request POST "https://api.appetize.io/v1/apps/${APPETIZE_IOS_PUBLIC_KEY}" \
               --header "X-API-KEY: ${APPETIZE_API_TOKEN}" \
               --form "file=@${ZIP_PATH}" \
               --form "platform=ios" \
