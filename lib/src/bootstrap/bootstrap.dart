@@ -6,9 +6,16 @@ import 'package:vaultcard/src/data/balance/gift_card_mall_client.dart';
 import 'package:vaultcard/src/data/balance/html_balance_parser.dart';
 import 'package:vaultcard/src/data/config/asset_parser_config_provider.dart';
 import 'package:vaultcard/src/data/repositories/local_card_repository.dart';
+import 'package:vaultcard/src/data/storage/app_preferences_store.dart';
+import 'package:vaultcard/src/data/storage/card_metadata_store.dart';
 import 'package:vaultcard/src/data/storage/hive_card_metadata_store.dart';
+import 'package:vaultcard/src/data/storage/in_memory_app_preferences_store.dart';
+import 'package:vaultcard/src/data/storage/in_memory_card_metadata_store.dart';
+import 'package:vaultcard/src/data/storage/in_memory_secure_credential_store.dart';
+import 'package:vaultcard/src/data/storage/secure_credential_store.dart';
 import 'package:vaultcard/src/data/storage/shared_preferences_app_preferences_store.dart';
 import 'package:vaultcard/src/data/storage/simple_secure_credential_store.dart';
+import 'package:vaultcard/src/domain/models/settings_models.dart';
 import 'package:vaultcard/src/providers/providers.dart';
 import 'package:vaultcard/src/services/app_lock_service.dart';
 import 'package:vaultcard/src/services/background_refresh_service.dart';
@@ -25,22 +32,32 @@ class Bootstrap {
   final List<Override> overrides;
   final BackgroundRefreshService backgroundRefreshService;
 
+  static const bool isQaMode = bool.fromEnvironment('VAULTCARD_QA');
+
   static Future<Bootstrap> create(SharedPreferences preferences) async {
-    final metadataStore = await HiveCardMetadataStore.create();
-    final appPreferencesStore = SharedPreferencesAppPreferencesStore(preferences);
+    final CardMetadataStore metadataStore = isQaMode
+        ? InMemoryCardMetadataStore()
+        : await HiveCardMetadataStore.create();
+    final SecureCredentialStore secureStore = isQaMode
+        ? InMemorySecureCredentialStore()
+        : const SimpleSecureCredentialStore();
+    final AppPreferencesStore appPreferencesStore = isQaMode
+        ? InMemoryAppPreferencesStore(
+            const AppSettings(onboardingCompleted: true),
+          )
+        : SharedPreferencesAppPreferencesStore(preferences);
     final notificationService = await NotificationService.create();
     const backgroundRefreshService = BackgroundRefreshService();
     return Bootstrap(
       [
         metadataStoreProvider.overrideWithValue(metadataStore),
-        secureCredentialStoreProvider.overrideWithValue(
-          const SimpleSecureCredentialStore(),
-        ),
+        secureCredentialStoreProvider.overrideWithValue(secureStore),
         parserConfigProviderProvider.overrideWithValue(
           AssetParserConfigProvider(rootBundle),
         ),
         balanceParserProvider.overrideWithValue(const HtmlBalanceParser()),
-        giftCardMallClientProvider.overrideWithValue(const GiftCardMallClient()),
+        giftCardMallClientProvider
+            .overrideWithValue(const GiftCardMallClient()),
         connectivityServiceProvider.overrideWithValue(
           const ConnectivityService(),
         ),
