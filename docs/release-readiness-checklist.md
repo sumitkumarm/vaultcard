@@ -15,7 +15,8 @@
 
 ## iOS
 
-- build and sign on a Mac with Xcode
+- native SwiftUI clean simulator build/test verified on macOS 15.6 with Xcode 26.3 and iPhone 17 Pro / iOS 26.3
+- build, sign, and launch on a physical iPhone
 - verify Face ID or passcode unlock flow
 - verify camera OCR permissions and capture flow
 - verify local notifications and background refresh constraints on device

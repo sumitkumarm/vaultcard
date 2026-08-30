@@ -53,8 +53,9 @@ final class VaultCardUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["4111111111111111"].waitForExistence(timeout: 5))
 
         app.buttons["detail.delete"].tap()
-        XCTAssertTrue(app.buttons["Delete"].waitForExistence(timeout: 5))
-        app.buttons["Delete"].tap()
+        let confirmDelete = app.buttons["detail.confirmDelete"].firstMatch
+        XCTAssertTrue(confirmDelete.waitForExistence(timeout: 5))
+        confirmDelete.tap()
 
         XCTAssertTrue(app.staticTexts["No cards yet"].waitForExistence(timeout: 5))
     }
