@@ -68,11 +68,44 @@ struct VaultCard: Identifiable, Equatable {
     var addedAt: Date
     var refreshBlockedUntil: Date?
     var credentialVersion: Int
+    var archivedAt: Date?
+
+    init(
+        id: String,
+        nickname: String?,
+        network: CardNetwork,
+        last4: String,
+        expiry: String,
+        balance: Double?,
+        transactions: [CardTransaction],
+        lastFetchedAt: Date?,
+        fetchFailureCount: Int,
+        addedAt: Date,
+        refreshBlockedUntil: Date?,
+        credentialVersion: Int,
+        archivedAt: Date? = nil
+    ) {
+        self.id = id
+        self.nickname = nickname
+        self.network = network
+        self.last4 = last4
+        self.expiry = expiry
+        self.balance = balance
+        self.transactions = transactions
+        self.lastFetchedAt = lastFetchedAt
+        self.fetchFailureCount = fetchFailureCount
+        self.addedAt = addedAt
+        self.refreshBlockedUntil = refreshBlockedUntil
+        self.credentialVersion = credentialVersion
+        self.archivedAt = archivedAt
+    }
 
     var displayName: String {
         let trimmed = nickname?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed! : "**** \(last4)"
     }
+
+    var isArchived: Bool { archivedAt != nil }
 
     func balanceFreshness(at date: Date = Date()) -> BalanceFreshness {
         guard fetchFailureCount == 0, let lastFetchedAt else { return .needsRefresh }
@@ -280,13 +313,25 @@ enum CardRules {
     static func sorted(_ cards: [VaultCard], by option: CardSortOption) -> [VaultCard] {
         switch option {
         case .dateAddedNewest:
-            return cards.sorted { $0.addedAt > $1.addedAt }
+            return cards.sorted {
+                if $0.addedAt != $1.addedAt { return $0.addedAt > $1.addedAt }
+                return $0.id < $1.id
+            }
         case .balanceLowToHigh:
-            return cards.sorted { ($0.balance ?? 0) < ($1.balance ?? 0) }
+            return cards.sorted {
+                if ($0.balance ?? 0) != ($1.balance ?? 0) { return ($0.balance ?? 0) < ($1.balance ?? 0) }
+                return $0.id < $1.id
+            }
         case .balanceHighToLow:
-            return cards.sorted { ($0.balance ?? 0) > ($1.balance ?? 0) }
+            return cards.sorted {
+                if ($0.balance ?? 0) != ($1.balance ?? 0) { return ($0.balance ?? 0) > ($1.balance ?? 0) }
+                return $0.id < $1.id
+            }
         case .expirySoonest:
-            return cards.sorted { $0.expiry < $1.expiry }
+            return cards.sorted {
+                if $0.expiry != $1.expiry { return $0.expiry < $1.expiry }
+                return $0.id < $1.id
+            }
         }
     }
 }
@@ -350,15 +395,72 @@ enum SchemaV1: VersionedSchema {
     }
 }
 
+enum SchemaV2: VersionedSchema {
+    static var versionIdentifier = Schema.Version(2, 0, 0)
+    static var models: [any PersistentModel.Type] {
+        [CardMetadataRecord.self, TransactionRecord.self]
+    }
+
+    @Model
+    final class CardMetadataRecord {
+        @Attribute(.unique) var id: String
+        var nickname: String?
+        var networkRaw: String
+        var last4: String
+        var expiry: String
+        var balance: Double?
+        var lastFetchedAt: Date?
+        var fetchFailureCount: Int
+        var addedAt: Date
+        var refreshBlockedUntil: Date?
+        var credentialVersion: Int
+        var archivedAt: Date?
+
+        init(card: VaultCard) {
+            id = card.id
+            nickname = card.nickname
+            networkRaw = card.network.rawValue
+            last4 = card.last4
+            expiry = card.expiry
+            balance = card.balance
+            lastFetchedAt = card.lastFetchedAt
+            fetchFailureCount = card.fetchFailureCount
+            addedAt = card.addedAt
+            refreshBlockedUntil = card.refreshBlockedUntil
+            credentialVersion = card.credentialVersion
+            archivedAt = card.archivedAt
+        }
+    }
+
+    @Model
+    final class TransactionRecord {
+        @Attribute(.unique) var id: String
+        var cardId: String
+        var date: Date
+        var transactionDescription: String
+        var amount: Double
+
+        init(cardId: String, transaction: CardTransaction) {
+            id = transaction.id
+            self.cardId = cardId
+            date = transaction.date
+            transactionDescription = transaction.description
+            amount = transaction.amount
+        }
+    }
+}
+
 enum VaultCardSchemaMigrationPlan: SchemaMigrationPlan {
-    static var schemas: [any VersionedSchema.Type] { [SchemaV1.self] }
-    static var stages: [MigrationStage] { [] }
+    static var schemas: [any VersionedSchema.Type] { [SchemaV1.self, SchemaV2.self] }
+    static var stages: [MigrationStage] {
+        [MigrationStage.lightweight(fromVersion: SchemaV1.self, toVersion: SchemaV2.self)]
+    }
 }
 
 enum ModelContainerFactory {
     static func makePersistent() throws -> ModelContainer {
         try ModelContainer(
-            for: Schema([SchemaV1.CardMetadataRecord.self, SchemaV1.TransactionRecord.self]),
+            for: Schema([SchemaV2.CardMetadataRecord.self, SchemaV2.TransactionRecord.self]),
             migrationPlan: VaultCardSchemaMigrationPlan.self
         )
     }
@@ -366,7 +468,7 @@ enum ModelContainerFactory {
     static func makeInMemory() throws -> ModelContainer {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
         return try ModelContainer(
-            for: Schema([SchemaV1.CardMetadataRecord.self, SchemaV1.TransactionRecord.self]),
+            for: Schema([SchemaV2.CardMetadataRecord.self, SchemaV2.TransactionRecord.self]),
             migrationPlan: VaultCardSchemaMigrationPlan.self,
             configurations: [configuration]
         )
@@ -414,6 +516,11 @@ protocol CardRepository {
     func getCard(id: String) throws -> VaultCard?
     func addCard(_ input: CardInput) throws -> String
     func deleteCard(id: String) throws
+    func deleteCards(ids: Set<String>) throws
+    func archiveCard(id: String) throws
+    func archiveCards(ids: Set<String>) throws
+    func unarchiveCard(id: String) throws
+    func unarchiveCards(ids: Set<String>) throws
     func updateCredentials(cardID: String, credentials: CardCredentials) throws
     func getCredentials(cardID: String) throws -> CardCredentials
     func applyBalanceResult(cardID: String, result: BalanceResult) throws
@@ -571,8 +678,8 @@ final class SwiftDataCardRepository: CardRepository {
     }
 
     func getCards() throws -> [VaultCard] {
-        let records = try context.fetch(FetchDescriptor<SchemaV1.CardMetadataRecord>())
-        let transactionRecords = try context.fetch(FetchDescriptor<SchemaV1.TransactionRecord>(
+        let records = try context.fetch(FetchDescriptor<SchemaV2.CardMetadataRecord>())
+        let transactionRecords = try context.fetch(FetchDescriptor<SchemaV2.TransactionRecord>(
             sortBy: [SortDescriptor(\.date, order: .reverse)]
         ))
         let transactionsByCard = Dictionary(grouping: transactionRecords, by: \.cardId).mapValues { records in
@@ -610,7 +717,7 @@ final class SwiftDataCardRepository: CardRepository {
                 refreshBlockedUntil: nil,
                 credentialVersion: 1
             )
-            context.insert(SchemaV1.CardMetadataRecord(card: card))
+            context.insert(SchemaV2.CardMetadataRecord(card: card))
             try beforeMetadataSave?()
             try context.save()
             return cardID
@@ -621,11 +728,42 @@ final class SwiftDataCardRepository: CardRepository {
     }
 
     func deleteCard(id: String) throws {
-        try credentialStore.delete(cardID: id)
-        guard let record = try findRecord(id: id) else { return }
-        context.delete(record)
-        try deleteTransactions(cardID: id)
+        try deleteCards(ids: [id])
+    }
+
+    func deleteCards(ids: Set<String>) throws {
+        guard !ids.isEmpty else { return }
+        let sortedIDs = ids.sorted()
+        let records = try sortedIDs.compactMap { try findRecord(id: $0) }
+
+        // Remove secure credentials first. Keychain deletion is idempotent, and no
+        // metadata is touched until every credential deletion succeeds.
+        for id in sortedIDs {
+            try credentialStore.delete(cardID: id)
+        }
+        for record in records {
+            context.delete(record)
+        }
+        for id in sortedIDs {
+            try deleteTransactions(cardID: id)
+        }
         try context.save()
+    }
+
+    func archiveCard(id: String) throws {
+        try archiveCards(ids: [id])
+    }
+
+    func archiveCards(ids: Set<String>) throws {
+        try setArchived(true, ids: ids)
+    }
+
+    func unarchiveCard(id: String) throws {
+        try unarchiveCards(ids: [id])
+    }
+
+    func unarchiveCards(ids: Set<String>) throws {
+        try setArchived(false, ids: ids)
     }
 
     func updateCredentials(cardID: String, credentials: CardCredentials) throws {
@@ -661,7 +799,7 @@ final class SwiftDataCardRepository: CardRepository {
         record.refreshBlockedUntil = result.fetchedAt.addingTimeInterval(15 * 60)
         try deleteTransactions(cardID: cardID)
         for transaction in result.transactions {
-            context.insert(SchemaV1.TransactionRecord(cardId: cardID, transaction: transaction))
+            context.insert(SchemaV2.TransactionRecord(cardId: cardID, transaction: transaction))
         }
         try context.save()
     }
@@ -678,15 +816,15 @@ final class SwiftDataCardRepository: CardRepository {
         try context.save()
     }
 
-    private func findRecord(id: String) throws -> SchemaV1.CardMetadataRecord? {
-        let descriptor = FetchDescriptor<SchemaV1.CardMetadataRecord>(
+    private func findRecord(id: String) throws -> SchemaV2.CardMetadataRecord? {
+        let descriptor = FetchDescriptor<SchemaV2.CardMetadataRecord>(
             predicate: #Predicate { $0.id == id }
         )
         return try context.fetch(descriptor).first
     }
 
     private func transactions(cardID: String) throws -> [CardTransaction] {
-        let descriptor = FetchDescriptor<SchemaV1.TransactionRecord>(
+        let descriptor = FetchDescriptor<SchemaV2.TransactionRecord>(
             predicate: #Predicate { $0.cardId == cardID },
             sortBy: [SortDescriptor(\.date, order: .reverse)]
         )
@@ -696,7 +834,7 @@ final class SwiftDataCardRepository: CardRepository {
     }
 
     private func deleteTransactions(cardID: String) throws {
-        let descriptor = FetchDescriptor<SchemaV1.TransactionRecord>(
+        let descriptor = FetchDescriptor<SchemaV2.TransactionRecord>(
             predicate: #Predicate { $0.cardId == cardID }
         )
         for record in try context.fetch(descriptor) {
@@ -704,7 +842,21 @@ final class SwiftDataCardRepository: CardRepository {
         }
     }
 
-    private func makeCard(from record: SchemaV1.CardMetadataRecord, loadedTransactions: [CardTransaction]? = nil) throws -> VaultCard {
+    private func setArchived(_ archived: Bool, ids: Set<String>) throws {
+        guard !ids.isEmpty else { return }
+        let sortedIDs = ids.sorted()
+        let records = try sortedIDs.map { id -> SchemaV2.CardMetadataRecord in
+            guard let record = try findRecord(id: id) else { throw VaultError.cardNotFound }
+            return record
+        }
+        let archiveDate = archived ? now() : nil
+        for record in records {
+            record.archivedAt = archiveDate
+        }
+        try context.save()
+    }
+
+    private func makeCard(from record: SchemaV2.CardMetadataRecord, loadedTransactions: [CardTransaction]? = nil) throws -> VaultCard {
         VaultCard(
             id: record.id,
             nickname: record.nickname,
@@ -717,7 +869,8 @@ final class SwiftDataCardRepository: CardRepository {
             fetchFailureCount: record.fetchFailureCount,
             addedAt: record.addedAt,
             refreshBlockedUntil: record.refreshBlockedUntil,
-            credentialVersion: record.credentialVersion
+            credentialVersion: record.credentialVersion,
+            archivedAt: record.archivedAt
         )
     }
 }
@@ -1618,7 +1771,23 @@ final class AppModel {
     }
 
     var sortedCards: [VaultCard] {
-        CardRules.sorted(cards, by: settings.sortOption)
+        sortedActiveCards
+    }
+
+    var activeCards: [VaultCard] {
+        cards.filter { !$0.isArchived }
+    }
+
+    var archivedCards: [VaultCard] {
+        cards.filter(\.isArchived)
+    }
+
+    var sortedActiveCards: [VaultCard] {
+        CardRules.sorted(activeCards, by: settings.sortOption)
+    }
+
+    var sortedArchivedCards: [VaultCard] {
+        CardRules.sorted(archivedCards, by: settings.sortOption)
     }
 
     func start() async {
@@ -1670,6 +1839,12 @@ final class AppModel {
 
     var isShowingVault: Bool { routePath.isEmpty }
 
+    var isShowingArchived: Bool {
+        guard let first = routePath.first else { return false }
+        if case .archived = first { return true }
+        return false
+    }
+
     var isShowingAddFlow: Bool {
         guard let first = routePath.first else { return false }
         switch first {
@@ -1700,9 +1875,46 @@ final class AppModel {
     }
 
     func deleteCard(id: String) throws {
+        let shouldReturnToArchivedList = isDetailPresentedFromArchivedList(for: id)
         try environment.cardRepository.deleteCard(id: id)
-        routePath.removeAll()
+        if shouldReturnToArchivedList {
+            routePath.removeLast()
+        } else {
+            routePath.removeAll()
+        }
         reloadCards()
+    }
+
+    func deleteCards(ids: Set<String>) throws {
+        try environment.cardRepository.deleteCards(ids: ids)
+        reloadCards()
+    }
+
+    func archiveCard(id: String) throws {
+        try environment.cardRepository.archiveCard(id: id)
+        reloadCards()
+        popDetailIfNeeded(for: id)
+    }
+
+    func archiveCards(ids: Set<String>) throws {
+        try environment.cardRepository.archiveCards(ids: ids)
+        reloadCards()
+    }
+
+    func unarchiveCard(id: String) throws {
+        try environment.cardRepository.unarchiveCard(id: id)
+        reloadCards()
+        popDetailIfNeeded(for: id)
+    }
+
+    func unarchiveCards(ids: Set<String>) throws {
+        try environment.cardRepository.unarchiveCards(ids: ids)
+        reloadCards()
+    }
+
+    func showArchivedCards() {
+        guard routePath.last != .archived else { return }
+        routePath = [.archived]
     }
 
     func revealCardNumber(id: String) async throws -> String {
@@ -1764,6 +1976,19 @@ final class AppModel {
     private func saveSettings() {
         environment.settingsRepository.save(settings)
     }
+
+    private func popDetailIfNeeded(for cardID: String) {
+        guard case .detail(let currentID) = routePath.last, currentID == cardID else { return }
+        routePath.removeLast()
+    }
+
+    private func isDetailPresentedFromArchivedList(for cardID: String) -> Bool {
+        guard routePath.count >= 2,
+              case .archived = routePath[routePath.count - 2],
+              case .detail(let currentID) = routePath.last
+        else { return false }
+        return currentID == cardID
+    }
 }
 
 enum Route: Hashable {
@@ -1772,6 +1997,7 @@ enum Route: Hashable {
     case scan
     case detail(String)
     case giftCardMall(String)
+    case archived
     case settings
 }
 
@@ -1863,13 +2089,14 @@ struct RootView: View {
                             case .scan: ScanCardView()
                             case .detail(let id): CardDetailView(cardID: id)
                             case .giftCardMall(let id): GiftCardMallRefreshView(cardID: id)
+                            case .archived: ArchivedCardsView()
                             case .settings: SettingsView()
                             }
                         }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     VaultFloatingBar(
-                        vaultSelected: model.isShowingVault,
+                        vaultSelected: model.isShowingVault || model.isShowingArchived,
                         addSelected: model.isShowingAddFlow,
                         settingsSelected: model.isShowingSettings,
                         showVault: { withAnimation(.snappy) { model.showVault() } },
@@ -2001,6 +2228,9 @@ struct CardListView: View {
     @State private var selectedFilter = CardFilter.all
     @State private var isStackExpanded = false
     @State private var pendingDelete: VaultCard?
+    @State private var isSelectingRecentCards = false
+    @State private var selectedCardIDs = Set<String>()
+    @State private var isBulkDeleteConfirmationPresented = false
     @FocusState private var searchIsFocused: Bool
 
     private var visibleCards: [VaultCard] {
@@ -2046,6 +2276,17 @@ struct CardListView: View {
             .environment(\.defaultMinListRowHeight, 1)
             .navigationTitle("Vault")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        model.showArchivedCards()
+                    } label: {
+                        Image(systemName: "archivebox")
+                    }
+                    .accessibilityIdentifier("cards.archived")
+                    .accessibilityLabel("Archived cards")
+                    .accessibilityValue("\(model.archivedCards.count) cards")
+                    .accessibilityHint("Open archived cards")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         ForEach(CardSortOption.allCases) { option in
@@ -2073,6 +2314,26 @@ struct CardListView: View {
             }
         } message: {
             Text("This removes the card and its secure credentials from this device.")
+        }
+        .alert(
+            "Delete \(selectedCardIDs.count) card\(selectedCardIDs.count == 1 ? "" : "s")?",
+            isPresented: $isBulkDeleteConfirmationPresented
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete \(selectedCardIDs.count)", role: .destructive) {
+                deleteSelectedCards()
+            }
+            .accessibilityIdentifier("cards.bulk.delete.confirm")
+        } message: {
+            Text("This permanently removes the selected card metadata and secure credentials from this device.")
+        }
+        .onChange(of: searchText) { _, _ in
+            guard isSelectingRecentCards else { return }
+            cancelSelection()
+        }
+        .onChange(of: selectedFilter) { _, _ in
+            guard isSelectingRecentCards else { return }
+            cancelSelection()
         }
     }
 
@@ -2104,28 +2365,44 @@ struct CardListView: View {
     private var filterRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                filterButton(.all, count: model.cards.count)
-                filterButton(.upToDate, count: model.cards.filter { $0.balanceFreshness() == .upToDate }.count)
-                filterButton(.needsRefresh, count: model.cards.filter { $0.balanceFreshness() == .needsRefresh }.count)
+                filterButton(.all, count: model.sortedCards.count)
+                filterButton(.upToDate, count: model.sortedCards.filter { $0.balanceFreshness() == .upToDate }.count)
+                filterButton(.needsRefresh, count: model.sortedCards.filter { $0.balanceFreshness() == .needsRefresh }.count)
             }
         }
         .cardListRowStyle(verticalPadding: 2)
     }
 
     private var emptyState: some View {
-        VaultSurface {
+        let noCards = model.cards.isEmpty
+        let allCardsArchived = !noCards && model.activeCards.isEmpty
+        return VaultSurface {
             VStack(spacing: 16) {
                 VaultBrandMark(size: 82)
-                Text(model.cards.isEmpty ? "No cards yet" : "No matching cards")
+                Text(noCards ? "No cards yet" : allCardsArchived ? "Your vault is archived" : "No matching cards")
                     .font(.title2.bold())
-                Text(model.cards.isEmpty ? "Add your first Visa or Mastercard prepaid card to start tracking balances and expiry dates." : "Try another filter, card name, network, or last four digits.")
+                Text(
+                    noCards
+                        ? "Add your first Visa or Mastercard prepaid card to start tracking balances and expiry dates."
+                        : allCardsArchived
+                            ? "Your archived cards are safe and can be restored whenever you need them."
+                            : "Try another filter, card name, network, or last four digits."
+                )
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                if model.cards.isEmpty {
+                if noCards {
                     Button("Add Your First Card") { model.showPreferredAddFlow() }
                         .accessibilityIdentifier("cards.empty.add")
                         .vaultPrimaryButton()
+                } else if allCardsArchived {
+                    Button {
+                        model.showArchivedCards()
+                    } label: {
+                        Label("View Archived Cards", systemImage: "archivebox")
+                    }
+                    .accessibilityIdentifier("cards.empty.archived")
+                    .vaultPrimaryButton()
                 }
             }
             .frame(maxWidth: .infinity)
@@ -2206,23 +2483,136 @@ struct CardListView: View {
 
     @ViewBuilder
     private var recentCardRows: some View {
-        Text("Recently Updated")
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .cardListRowStyle(verticalPadding: 4)
+        HStack {
+            Text("Recently Updated")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+            if isSelectingRecentCards {
+                Button("Cancel") { cancelSelection() }
+                    .font(.subheadline.weight(.semibold))
+                    .accessibilityIdentifier("cards.bulk.cancel")
+            } else {
+                Button("Select") { beginSelection() }
+                    .font(.subheadline.weight(.semibold))
+                    .accessibilityIdentifier("cards.bulk.select")
+                    .accessibilityLabel("Select cards")
+            }
+        }
+        .cardListRowStyle(verticalPadding: 4)
+
+        if isSelectingRecentCards {
+            HStack(spacing: 10) {
+                Button {
+                    archiveSelectedCards()
+                } label: {
+                    Label("Archive \(selectedCardIDs.count)", systemImage: "archivebox")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(selectedCardIDs.isEmpty)
+                .accessibilityIdentifier("cards.bulk.archive")
+                .accessibilityLabel("Archive selected cards")
+                .accessibilityValue("\(selectedCardIDs.count) selected")
+                .vaultGlass(cornerRadius: 16, interactive: true)
+
+                Button(role: .destructive) {
+                    isBulkDeleteConfirmationPresented = true
+                } label: {
+                    Label("Delete \(selectedCardIDs.count)", systemImage: "trash")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(selectedCardIDs.isEmpty)
+                .accessibilityIdentifier("cards.bulk.delete")
+                .accessibilityLabel("Delete selected cards")
+                .accessibilityValue("\(selectedCardIDs.count) selected")
+                .tint(.red)
+                .vaultGlass(cornerRadius: 16, interactive: true)
+            }
+            .cardListRowStyle(verticalPadding: 2)
+        }
 
         ForEach(visibleCards) { card in
-            Button { model.routePath.append(.detail(card.id)) } label: {
+            if isSelectingRecentCards {
+                cardSelectionRow(for: card)
+            } else {
+                cardNavigationRow(for: card)
+            }
+        }
+    }
+
+    private func cardNavigationRow(for card: VaultCard) -> some View {
+        Button { model.routePath.append(.detail(card.id)) } label: {
+            VaultSurface(padding: 8) {
+                CardRow(card: card)
+            }
+        }
+        .buttonStyle(.plain)
+        .cardListRowStyle(verticalPadding: 4)
+        // Keep the full-swipe behavior consistent with the larger card artwork.
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            deleteAction(for: card)
+        }
+    }
+
+    private func cardSelectionRow(for card: VaultCard) -> some View {
+        let isSelected = selectedCardIDs.contains(card.id)
+        return Button {
+            withAnimation(.snappy) { toggleSelection(for: card.id) }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? VaultTheme.electricBlue : .secondary)
+                    .accessibilityHidden(true)
                 VaultSurface(padding: 8) {
                     CardRow(card: card)
                 }
             }
-            .buttonStyle(.plain)
-            .cardListRowStyle(verticalPadding: 4)
-            // Keep the full-swipe behavior consistent with the larger card artwork.
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                deleteAction(for: card)
-            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("cards.bulk.select.\(card.id)")
+        .accessibilityLabel("Select \(card.displayName)")
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .cardListRowStyle(verticalPadding: 4)
+    }
+
+    private func beginSelection() {
+        selectedCardIDs.removeAll()
+        isSelectingRecentCards = true
+    }
+
+    private func cancelSelection() {
+        selectedCardIDs.removeAll()
+        isSelectingRecentCards = false
+    }
+
+    private func toggleSelection(for cardID: String) {
+        if selectedCardIDs.contains(cardID) {
+            selectedCardIDs.remove(cardID)
+        } else {
+            selectedCardIDs.insert(cardID)
+        }
+    }
+
+    private func archiveSelectedCards() {
+        guard !selectedCardIDs.isEmpty else { return }
+        do {
+            try model.archiveCards(ids: selectedCardIDs)
+            cancelSelection()
+        } catch {
+            model.alertMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteSelectedCards() {
+        guard !selectedCardIDs.isEmpty else { return }
+        do {
+            try model.deleteCards(ids: selectedCardIDs)
+            cancelSelection()
+        } catch {
+            model.alertMessage = error.localizedDescription
         }
     }
 
@@ -2245,6 +2635,125 @@ struct CardListView: View {
             Label("Delete", systemImage: "trash")
         }
         .tint(.red)
+    }
+}
+
+struct ArchivedCardsView: View {
+    @Environment(AppModel.self) private var model
+    @State private var pendingDelete: VaultCard?
+
+    var body: some View {
+        ZStack {
+            VaultBackground()
+            List {
+                if model.sortedArchivedCards.isEmpty {
+                    emptyState
+                } else {
+                    Section {
+                        ForEach(model.sortedArchivedCards) { card in
+                            Button { model.routePath.append(.detail(card.id)) } label: {
+                                VaultSurface(padding: 8) {
+                                    CardRow(card: card)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("archived.card.row.\(card.id)")
+                            .accessibilityLabel("Open archived \(card.displayName)")
+                            .cardListRowStyle(verticalPadding: 4)
+                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                Button {
+                                    restore(cardID: card.id)
+                                } label: {
+                                    Label("Restore", systemImage: "arrow.uturn.backward")
+                                }
+                                .tint(VaultTheme.electricBlue)
+                                .accessibilityIdentifier("archived.restore.\(card.id)")
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                deleteAction(for: card)
+                            }
+                        }
+                    } header: {
+                        Text("\(model.sortedArchivedCards.count) archived card\(model.sortedArchivedCards.count == 1 ? "" : "s")")
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 1)
+        }
+        .navigationTitle("Archived Cards")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Text("\(model.archivedCards.count)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Archived card count")
+                    .accessibilityValue("\(model.archivedCards.count)")
+            }
+        }
+        .alert("Remove archived card?", isPresented: Binding(
+            get: { pendingDelete != nil },
+            set: { if !$0 { pendingDelete = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+            Button("Delete", role: .destructive) {
+                guard let card = pendingDelete else { return }
+                pendingDelete = nil
+                do {
+                    try model.deleteCard(id: card.id)
+                } catch {
+                    model.alertMessage = error.localizedDescription
+                }
+            }
+            .accessibilityIdentifier("archived.delete.confirm")
+        } message: {
+            Text("This permanently removes the archived card metadata and secure credentials from this device.")
+        }
+    }
+
+    private var emptyState: some View {
+        VaultSurface {
+            VStack(spacing: 14) {
+                Image(systemName: "archivebox")
+                    .font(.system(size: 42, weight: .semibold))
+                    .foregroundStyle(VaultTheme.electricBlue)
+                Text("No Archived Cards")
+                    .font(.title2.bold())
+                Text("Cards you archive will live here until you restore or delete them.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button {
+                    model.showVault()
+                } label: {
+                    Label("Back to Vault", systemImage: "arrow.left")
+                }
+                .accessibilityIdentifier("archived.empty.back")
+                .vaultPrimaryButton()
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 28)
+        }
+        .cardListRowStyle(verticalPadding: 12)
+    }
+
+    private func restore(cardID: String) {
+        do {
+            try model.unarchiveCard(id: cardID)
+        } catch {
+            model.alertMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteAction(for card: VaultCard) -> some View {
+        Button(role: .destructive) {
+            pendingDelete = card
+        } label: {
+            Label("Delete", systemImage: "trash")
+        }
+        .tint(.red)
+        .accessibilityIdentifier("archived.delete.\(card.id)")
     }
 }
 
@@ -3096,6 +3605,17 @@ struct CardDetailView: View {
         .navigationTitle(card?.displayName ?? "Card")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                if let card {
+                    Button {
+                        toggleArchive(for: card)
+                    } label: {
+                        Image(systemName: card.isArchived ? "arrow.uturn.backward" : "archivebox")
+                    }
+                    .accessibilityIdentifier(card.isArchived ? "detail.restore" : "detail.archive")
+                    .accessibilityLabel(card.isArchived ? "Restore card" : "Archive card")
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button(role: .destructive) {
                     confirmDelete = true
                 } label: { Image(systemName: "trash") }
@@ -3133,6 +3653,18 @@ struct CardDetailView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func toggleArchive(for card: VaultCard) {
+        do {
+            if card.isArchived {
+                try model.unarchiveCard(id: card.id)
+            } else {
+                try model.archiveCard(id: card.id)
+            }
+        } catch {
+            model.alertMessage = error.localizedDescription
         }
     }
 

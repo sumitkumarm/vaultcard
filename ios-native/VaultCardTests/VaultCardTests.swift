@@ -232,6 +232,180 @@ final class VaultCardTests: XCTestCase {
         XCTAssertNotNil(card.refreshBlockedUntil)
     }
 
+    func testArchiveAndUnarchivePersistCardDataCredentialsAndTransactions() throws {
+        let container = try ModelContainerFactory.makeInMemory()
+        let context = ModelContext(container)
+        let store = FakeCredentialStore()
+        let archiveDate = Date(timeIntervalSince1970: 500)
+        let repository = SwiftDataCardRepository(
+            context: context,
+            credentialStore: store,
+            now: { archiveDate },
+            uuid: { "archive-card" }
+        )
+        let id = try repository.addCard(
+            CardInput(
+                cardNumber: "4111111111111111",
+                expiry: "09/29",
+                cvv: "123",
+                pin: "4567",
+                nickname: "Travel"
+            )
+        )
+        let fetchedAt = Date(timeIntervalSince1970: 400)
+        let transactions = [
+            CardTransaction(
+                id: "transaction-1",
+                date: Date(timeIntervalSince1970: 300),
+                description: "Coffee Shop",
+                amount: -7.25
+            ),
+            CardTransaction(
+                id: "transaction-2",
+                date: Date(timeIntervalSince1970: 200),
+                description: "Gift Load",
+                amount: 50
+            )
+        ]
+        try repository.applyBalanceResult(
+            cardID: id,
+            result: BalanceResult(balance: 42.75, transactions: transactions, fetchedAt: fetchedAt)
+        )
+        let expectedCredentials = try repository.getCredentials(cardID: id)
+
+        try repository.archiveCard(id: id)
+        let archived = try XCTUnwrap(repository.getCard(id: id))
+        XCTAssertTrue(archived.isArchived)
+        XCTAssertEqual(archived.archivedAt, archiveDate)
+        XCTAssertEqual(archived.balance, 42.75)
+        XCTAssertEqual(archived.transactions, transactions)
+        XCTAssertEqual(try repository.getCredentials(cardID: id), expectedCredentials)
+
+        // A new context proves the archive marker and all non-secret data are saved,
+        // while the shared credential store proves secrets remain available.
+        let reloadedRepository = SwiftDataCardRepository(
+            context: ModelContext(container),
+            credentialStore: store,
+            now: { archiveDate }
+        )
+        let persisted = try XCTUnwrap(reloadedRepository.getCard(id: id))
+        XCTAssertTrue(persisted.isArchived)
+        XCTAssertEqual(persisted.archivedAt, archiveDate)
+        XCTAssertEqual(persisted.balance, 42.75)
+        XCTAssertEqual(persisted.transactions, transactions)
+        XCTAssertEqual(try reloadedRepository.getCredentials(cardID: id), expectedCredentials)
+
+        try reloadedRepository.unarchiveCard(id: id)
+        let restored = try XCTUnwrap(reloadedRepository.getCard(id: id))
+        XCTAssertFalse(restored.isArchived)
+        XCTAssertNil(restored.archivedAt)
+        XCTAssertEqual(restored.balance, 42.75)
+        XCTAssertEqual(restored.transactions, transactions)
+        XCTAssertEqual(try reloadedRepository.getCredentials(cardID: id), expectedCredentials)
+    }
+
+    func testAppModelPartitionsActiveAndArchivedCardsAndSupportsBulkArchiveUnarchive() throws {
+        let container = try ModelContainerFactory.makeInMemory()
+        let context = ModelContext(container)
+        let store = FakeCredentialStore()
+        var nextIDs = ["active-card", "archived-card-1", "archived-card-2"]
+        let repository = SwiftDataCardRepository(
+            context: context,
+            credentialStore: store,
+            now: { Date(timeIntervalSince1970: 600) },
+            uuid: { nextIDs.removeFirst() }
+        )
+        let environment = AppEnvironment(
+            cardRepository: repository,
+            settingsRepository: InMemorySettingsRepository(),
+            biometricService: AlwaysAllowAuthenticationService(),
+            notificationService: NoopNotificationService(),
+            scanner: StaticCardScanner()
+        )
+        let model = AppModel(environment: environment)
+        let activeID = try model.addCard(validInput(nickname: "Active"))
+        let archivedID1 = try model.addCard(validInput(nickname: "Archived One"))
+        let archivedID2 = try model.addCard(validInput(nickname: "Archived Two"))
+
+        XCTAssertEqual(Set(model.activeCards.map(\.id)), Set([activeID, archivedID1, archivedID2]))
+        XCTAssertTrue(model.archivedCards.isEmpty)
+        XCTAssertEqual(Set(model.sortedCards.map(\.id)), Set([activeID, archivedID1, archivedID2]))
+
+        try model.archiveCards(ids: [archivedID1, archivedID2])
+        XCTAssertEqual(Set(model.activeCards.map(\.id)), [activeID])
+        XCTAssertEqual(Set(model.archivedCards.map(\.id)), Set([archivedID1, archivedID2]))
+        XCTAssertEqual(Set(model.sortedCards.map(\.id)), [activeID])
+        XCTAssertEqual(Set(model.sortedArchivedCards.map(\.id)), Set([archivedID1, archivedID2]))
+        XCTAssertTrue(model.archivedCards.allSatisfy(\.isArchived))
+
+        try model.unarchiveCards(ids: [archivedID1])
+        XCTAssertEqual(Set(model.activeCards.map(\.id)), Set([activeID, archivedID1]))
+        XCTAssertEqual(Set(model.archivedCards.map(\.id)), [archivedID2])
+
+        try model.unarchiveCards(ids: [archivedID2])
+        XCTAssertEqual(Set(model.activeCards.map(\.id)), Set([activeID, archivedID1, archivedID2]))
+        XCTAssertTrue(model.archivedCards.isEmpty)
+    }
+
+    func testBulkDeletionRemovesOnlySelectedCardsAndPreservesUnselectedCredentials() throws {
+        let container = try ModelContainerFactory.makeInMemory()
+        let context = ModelContext(container)
+        let store = FakeCredentialStore()
+        var nextIDs = ["delete-card-1", "delete-card-2", "survivor-card"]
+        let repository = SwiftDataCardRepository(
+            context: context,
+            credentialStore: store,
+            uuid: { nextIDs.removeFirst() }
+        )
+        let environment = AppEnvironment(
+            cardRepository: repository,
+            settingsRepository: InMemorySettingsRepository(),
+            biometricService: AlwaysAllowAuthenticationService(),
+            notificationService: NoopNotificationService(),
+            scanner: StaticCardScanner()
+        )
+        let model = AppModel(environment: environment)
+        let deletedID1 = try model.addCard(validInput(nickname: "Delete One"))
+        let deletedID2 = try model.addCard(validInput(nickname: "Delete Two"))
+        let survivorID = try model.addCard(validInput(nickname: "Keep Me"))
+        let survivorCredentials = try repository.getCredentials(cardID: survivorID)
+
+        try model.deleteCards(ids: [deletedID1, deletedID2])
+
+        XCTAssertEqual(model.cards.map(\.id), [survivorID])
+        XCTAssertNil(try repository.getCard(id: deletedID1))
+        XCTAssertNil(try repository.getCard(id: deletedID2))
+        XCTAssertThrowsError(try repository.getCredentials(cardID: deletedID1)) { error in
+            XCTAssertEqual(error as? VaultError, .cardNotFound)
+        }
+        XCTAssertThrowsError(try repository.getCredentials(cardID: deletedID2)) { error in
+            XCTAssertEqual(error as? VaultError, .cardNotFound)
+        }
+        XCTAssertEqual(try repository.getCredentials(cardID: survivorID), survivorCredentials)
+        XCTAssertEqual(Set(store.records.keys), [survivorID])
+    }
+
+    func testSchemaV2ArchivedAtDefaultsToNilForLegacyStyleCard() {
+        let card = VaultCard(
+            id: "legacy-card",
+            nickname: "Legacy",
+            network: .visa,
+            last4: "1111",
+            expiry: "09/29",
+            balance: 12,
+            transactions: [],
+            lastFetchedAt: Date(timeIntervalSince1970: 100),
+            fetchFailureCount: 0,
+            addedAt: Date(timeIntervalSince1970: 0),
+            refreshBlockedUntil: nil,
+            credentialVersion: 1
+        )
+
+        XCTAssertNil(card.archivedAt)
+        XCTAssertFalse(card.isArchived)
+        XCTAssertNil(SchemaV2.CardMetadataRecord(card: card).archivedAt)
+    }
+
     func testHtmlBalanceParserParsesBalanceAndTransactionsFixture() throws {
         let html = """
         <html>
