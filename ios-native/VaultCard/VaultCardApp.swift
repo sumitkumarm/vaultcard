@@ -38,6 +38,19 @@ enum CardSortOption: String, Codable, CaseIterable, Identifiable {
             return "Expiry Soonest"
         }
     }
+
+    var listHeading: String {
+        switch self {
+        case .dateAddedNewest:
+            return "Newest First"
+        case .balanceLowToHigh:
+            return "Lowest Balance First"
+        case .balanceHighToLow:
+            return "Highest Balance First"
+        case .expirySoonest:
+            return "Expiring Soonest"
+        }
+    }
 }
 
 enum AddCardPreference: String, Codable, CaseIterable, Identifiable {
@@ -2413,20 +2426,30 @@ struct CardListView: View {
 
     @ViewBuilder
     private var cardCollection: some View {
-        if visibleCards.count > 1, isStackExpanded {
+        if visibleCards.count > 1 {
             HStack {
                 Text("Cards")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Collapse") {
+                Button {
                     withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
-                        isStackExpanded = false
+                        isStackExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(isStackExpanded ? "Collapse" : "Expand")
+                        Image(systemName: isStackExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption2.weight(.bold))
                     }
                 }
                 .font(.caption.weight(.semibold))
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("cards.stack.toggle")
+                .accessibilityLabel(isStackExpanded ? "Collapse cards" : "Expand cards")
             }
-            .cardListRowStyle(verticalPadding: 2)
+            .padding(.top, 12)
+            .cardListRowStyle(verticalPadding: 3)
         }
 
         if visibleCards.count == 1, let card = visibleCards.first {
@@ -2460,22 +2483,11 @@ struct CardListView: View {
                     isStackExpanded = true
                 }
             } label: {
-                VStack(spacing: 4) {
-                    HStack(spacing: 10) {
-                        Label("View all \(visibleCards.count) cards", systemImage: "rectangle.stack.fill")
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        Image(systemName: "chevron.down")
-                            .font(.caption.weight(.bold))
-                    }
-                    .padding(.horizontal, 14)
-                    .frame(height: 44)
-                    .vaultGlass(cornerRadius: 18, interactive: true)
-                    VaultCardStackView(cards: visibleCards)
-                }
+                VaultCardStackView(cards: visibleCards)
             }
             .accessibilityIdentifier("cards.stack.expand")
-            .accessibilityLabel("View all \(visibleCards.count) cards")
+            .accessibilityLabel("Expand \(visibleCards.count) cards")
+            .accessibilityHint("Shows each card separately")
             .buttonStyle(.plain)
             .cardListRowStyle(verticalPadding: 2)
         }
@@ -2484,7 +2496,7 @@ struct CardListView: View {
     @ViewBuilder
     private var recentCardRows: some View {
         HStack {
-            Text("Recently Updated")
+            Text(model.settings.sortOption.listHeading)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
             Spacer()
@@ -2499,6 +2511,7 @@ struct CardListView: View {
                     .accessibilityLabel("Select cards")
             }
         }
+        .padding(.top, 10)
         .cardListRowStyle(verticalPadding: 4)
 
         if isSelectingRecentCards {
@@ -2762,6 +2775,9 @@ struct VaultCardStackView: View {
 
     var body: some View {
         let stackedCards = Array(cards.prefix(4))
+        let lastIndex = CGFloat(max(0, stackedCards.count - 1))
+        let lastCardHeight = 176 * (1 - lastIndex * 0.032)
+        let stackHeight = lastIndex * 28 + lastCardHeight + 12
         ZStack(alignment: .top) {
             ForEach(Array(stackedCards.enumerated()).reversed(), id: \.element.id) { index, card in
                 VaultCardArtwork(card: card, emphasizesEdge: index > 0)
@@ -2771,7 +2787,7 @@ struct VaultCardStackView: View {
                     .accessibilityHidden(index != 0)
             }
         }
-        .frame(height: 176 + CGFloat(max(0, stackedCards.count - 1)) * 28)
+        .frame(height: stackHeight, alignment: .top)
     }
 }
 
