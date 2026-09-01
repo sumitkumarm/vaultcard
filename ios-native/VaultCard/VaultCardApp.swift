@@ -2246,6 +2246,51 @@ struct CardListView: View {
     @State private var isBulkDeleteConfirmationPresented = false
     @FocusState private var searchIsFocused: Bool
 
+    private struct BulkActionButtonStyle: ButtonStyle {
+        let tint: Color
+
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .modifier(BulkActionButtonChrome(tint: tint, isPressed: configuration.isPressed))
+        }
+    }
+
+    private struct BulkActionButtonChrome: ViewModifier {
+        @Environment(\.isEnabled) private var isEnabled
+        let tint: Color
+        let isPressed: Bool
+
+        @ViewBuilder
+        func body(content: Content) -> some View {
+            if #available(iOS 26.0, *) {
+                content
+                    .foregroundStyle(isEnabled ? tint : Color.secondary.opacity(0.55))
+                    .opacity(isEnabled && isPressed ? 0.82 : 1)
+                    .scaleEffect(isEnabled && isPressed ? 0.98 : 1)
+                    .glassEffect(
+                        .regular
+                            .tint(tint.opacity(isEnabled ? 0.32 : 0.06))
+                            .interactive(isEnabled),
+                        in: .rect(cornerRadius: 18)
+                    )
+            } else {
+                content
+                    .foregroundStyle(isEnabled ? tint : Color.secondary.opacity(0.55))
+                    .opacity(isEnabled && isPressed ? 0.82 : 1)
+                    .scaleEffect(isEnabled && isPressed ? 0.98 : 1)
+                    .background(
+                        isEnabled ? tint.opacity(isPressed ? 0.2 : 0.12) : Color.secondary.opacity(0.06),
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    )
+                    .vaultGlass(cornerRadius: 18, interactive: isEnabled)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(isEnabled ? tint.opacity(0.42) : Color.secondary.opacity(0.12), lineWidth: 1)
+                    }
+            }
+        }
+    }
+
     private var visibleCards: [VaultCard] {
         let filtered: [VaultCard]
         switch selectedFilter {
@@ -2496,14 +2541,20 @@ struct CardListView: View {
     @ViewBuilder
     private var recentCardRows: some View {
         HStack {
-            Text(model.settings.sortOption.listHeading)
+            Text(isSelectingRecentCards ? "\(selectedCardIDs.count) Selected" : model.settings.sortOption.listHeading)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
             Spacer()
             if isSelectingRecentCards {
-                Button("Cancel") { cancelSelection() }
+                Button(action: cancelSelection) {
+                    Text("Cancel")
+                        .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                        .contentShape(Rectangle())
+                }
                     .font(.subheadline.weight(.semibold))
+                    .buttonStyle(.plain)
                     .accessibilityIdentifier("cards.bulk.cancel")
+                    .accessibilityLabel("Cancel card selection")
             } else {
                 Button("Select") { beginSelection() }
                     .font(.subheadline.weight(.semibold))
@@ -2515,33 +2566,10 @@ struct CardListView: View {
         .cardListRowStyle(verticalPadding: 4)
 
         if isSelectingRecentCards {
-            HStack(spacing: 10) {
-                Button {
-                    archiveSelectedCards()
-                } label: {
-                    Label("Archive \(selectedCardIDs.count)", systemImage: "archivebox")
-                        .frame(maxWidth: .infinity)
-                }
-                .disabled(selectedCardIDs.isEmpty)
-                .accessibilityIdentifier("cards.bulk.archive")
-                .accessibilityLabel("Archive selected cards")
-                .accessibilityValue("\(selectedCardIDs.count) selected")
-                .vaultGlass(cornerRadius: 16, interactive: true)
-
-                Button(role: .destructive) {
-                    isBulkDeleteConfirmationPresented = true
-                } label: {
-                    Label("Delete \(selectedCardIDs.count)", systemImage: "trash")
-                        .frame(maxWidth: .infinity)
-                }
-                .disabled(selectedCardIDs.isEmpty)
-                .accessibilityIdentifier("cards.bulk.delete")
-                .accessibilityLabel("Delete selected cards")
-                .accessibilityValue("\(selectedCardIDs.count) selected")
-                .tint(.red)
-                .vaultGlass(cornerRadius: 16, interactive: true)
-            }
-            .cardListRowStyle(verticalPadding: 2)
+            bulkActionControls
+                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 12, trailing: 20))
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
         }
 
         ForEach(visibleCards) { card in
@@ -2550,6 +2578,49 @@ struct CardListView: View {
             } else {
                 cardNavigationRow(for: card)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var bulkActionControls: some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 12) {
+                bulkActionButtons
+            }
+        } else {
+            bulkActionButtons
+        }
+    }
+
+    private var bulkActionButtons: some View {
+        HStack(spacing: 12) {
+            Button {
+                archiveSelectedCards()
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .contentShape(Rectangle())
+            }
+            .disabled(selectedCardIDs.isEmpty)
+            .accessibilityIdentifier("cards.bulk.archive")
+            .accessibilityLabel("Archive selected cards")
+            .accessibilityValue("\(selectedCardIDs.count) cards selected")
+            .buttonStyle(BulkActionButtonStyle(tint: VaultTheme.electricBlue))
+
+            Button(role: .destructive) {
+                isBulkDeleteConfirmationPresented = true
+            } label: {
+                Label("Delete", systemImage: "trash")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .contentShape(Rectangle())
+            }
+            .disabled(selectedCardIDs.isEmpty)
+            .accessibilityIdentifier("cards.bulk.delete")
+            .accessibilityLabel("Delete selected cards")
+            .accessibilityValue("\(selectedCardIDs.count) cards selected")
+            .buttonStyle(BulkActionButtonStyle(tint: VaultTheme.danger))
         }
     }
 
