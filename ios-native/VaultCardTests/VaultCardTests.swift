@@ -162,6 +162,48 @@ final class VaultCardTests: XCTestCase {
         }
     }
 
+    func testLegacyAppSettingsDefaultsSwipeArchiveConfirmationToUnseen() throws {
+        let legacy = try XCTUnwrap(#"{"onboardingCompleted":true,"addCardPreference":"scan"}"#.data(using: .utf8))
+
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: legacy)
+
+        XCTAssertFalse(decoded.hasSeenSwipeArchiveConfirmation)
+    }
+
+    func testMarkSwipeArchiveConfirmationSeenUpdatesAndPersistsSettings() throws {
+        let container = try ModelContainerFactory.makeInMemory()
+        let settingsRepository = InMemorySettingsRepository()
+        let environment = AppEnvironment(
+            cardRepository: SwiftDataCardRepository(
+                context: ModelContext(container),
+                credentialStore: FakeCredentialStore()
+            ),
+            settingsRepository: settingsRepository,
+            biometricService: AlwaysAllowAuthenticationService(),
+            notificationService: NoopNotificationService(),
+            scanner: StaticCardScanner()
+        )
+        let model = AppModel(environment: environment)
+
+        XCTAssertFalse(model.settings.hasSeenSwipeArchiveConfirmation)
+        model.markSwipeArchiveConfirmationSeen()
+
+        XCTAssertTrue(model.settings.hasSeenSwipeArchiveConfirmation)
+        XCTAssertTrue(settingsRepository.load().hasSeenSwipeArchiveConfirmation)
+    }
+
+    func testAppSettingsRoundTripPreservesSeenSwipeArchiveConfirmation() throws {
+        var settings = AppSettings()
+        settings.hasSeenSwipeArchiveConfirmation = true
+
+        let decoded = try JSONDecoder().decode(
+            AppSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+
+        XCTAssertTrue(decoded.hasSeenSwipeArchiveConfirmation)
+    }
+
     func testRepositoryRejectsDuplicateCredential() throws {
         let container = try ModelContainerFactory.makeInMemory()
         let context = ModelContext(container)

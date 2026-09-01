@@ -175,6 +175,7 @@ struct AppSettings: Codable, Equatable {
     var sortOption = CardSortOption.dateAddedNewest
     var notificationPreferences = NotificationPreferences()
     var addCardPreference = AddCardPreference.scan
+    var hasSeenSwipeArchiveConfirmation = false
 
     private enum CodingKeys: String, CodingKey {
         case onboardingCompleted
@@ -183,6 +184,7 @@ struct AppSettings: Codable, Equatable {
         case sortOption
         case notificationPreferences
         case addCardPreference
+        case hasSeenSwipeArchiveConfirmation
     }
 
     init() {}
@@ -195,6 +197,7 @@ struct AppSettings: Codable, Equatable {
         sortOption = try values.decodeIfPresent(CardSortOption.self, forKey: .sortOption) ?? .dateAddedNewest
         notificationPreferences = try values.decodeIfPresent(NotificationPreferences.self, forKey: .notificationPreferences) ?? NotificationPreferences()
         addCardPreference = try values.decodeIfPresent(AddCardPreference.self, forKey: .addCardPreference) ?? .scan
+        hasSeenSwipeArchiveConfirmation = try values.decodeIfPresent(Bool.self, forKey: .hasSeenSwipeArchiveConfirmation) ?? false
     }
 }
 
@@ -1834,6 +1837,12 @@ final class AppModel {
         saveSettings()
     }
 
+    func markSwipeArchiveConfirmationSeen() {
+        guard !settings.hasSeenSwipeArchiveConfirmation else { return }
+        settings.hasSeenSwipeArchiveConfirmation = true
+        saveSettings()
+    }
+
     func addCard(_ input: CardInput) throws -> String {
         guard CardRules.isValidCardNumber(input.cardNumber) else { throw VaultError.validation("Enter a valid Visa or Mastercard number.") }
         guard CardRules.validateExpiry(input.expiry) else { throw VaultError.validation("Use MM/YY.") }
@@ -2244,6 +2253,9 @@ struct CardListView: View {
     @State private var isSelectingRecentCards = false
     @State private var selectedCardIDs = Set<String>()
     @State private var isBulkDeleteConfirmationPresented = false
+    @State private var pendingSwipeArchiveEducation: VaultCard?
+    @State private var latestSwipeArchivedCard: VaultCard?
+    @State private var swipeArchiveDismissTask: Task<Void, Never>?
     @FocusState private var searchIsFocused: Bool
 
     private struct BulkActionButtonStyle: ButtonStyle {
@@ -2385,6 +2397,31 @@ struct CardListView: View {
         } message: {
             Text("This permanently removes the selected card metadata and secure credentials from this device.")
         }
+        .alert("Archive this card?", isPresented: Binding(
+            get: { pendingSwipeArchiveEducation != nil },
+            set: { if !$0 { pendingSwipeArchiveEducation = nil } }
+        )) {
+            Button("Cancel", role: .cancel) {
+                pendingSwipeArchiveEducation = nil
+            }
+            Button("Archive") {
+                guard let card = pendingSwipeArchiveEducation else { return }
+                pendingSwipeArchiveEducation = nil
+                archiveFromSwipe(card, markEducationSeen: true)
+            }
+            .accessibilityIdentifier("cards.swipe.archive.confirmation")
+        } message: {
+            Text("Archived cards leave the Vault but remain safely on this device. Future right swipes will archive immediately, and you can use Undo after each one.")
+        }
+        .overlay(alignment: .bottom) {
+            if let card = latestSwipeArchivedCard {
+                swipeArchiveToast(for: card)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(1)
+            }
+        }
         .onChange(of: searchText) { _, _ in
             guard isSelectingRecentCards else { return }
             cancelSelection()
@@ -2392,6 +2429,12 @@ struct CardListView: View {
         .onChange(of: selectedFilter) { _, _ in
             guard isSelectingRecentCards else { return }
             cancelSelection()
+        }
+        .onDisappear {
+            swipeArchiveDismissTask?.cancel()
+            swipeArchiveDismissTask = nil
+            latestSwipeArchivedCard = nil
+            pendingSwipeArchiveEducation = nil
         }
     }
 
@@ -2505,6 +2548,9 @@ struct CardListView: View {
             .accessibilityIdentifier("card.row.\(card.last4)")
             .accessibilityLabel("Open \(card.displayName)")
             .cardListRowStyle()
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                archiveAction(for: card)
+            }
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 deleteAction(for: card)
             }
@@ -2516,6 +2562,9 @@ struct CardListView: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("card.row.\(card.last4)")
                 .cardListRowStyle()
+                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                    archiveAction(for: card)
+                }
                 // A full trailing swipe reaches the same confirmation surface as the
                 // visible action, so it never removes credentials without consent.
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -2632,6 +2681,9 @@ struct CardListView: View {
         }
         .buttonStyle(.plain)
         .cardListRowStyle(verticalPadding: 4)
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            archiveAction(for: card)
+        }
         // Keep the full-swipe behavior consistent with the larger card artwork.
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             deleteAction(for: card)
@@ -2712,6 +2764,99 @@ struct CardListView: View {
         .disabled(selectedFilter == filter)
     }
 
+    private func archiveAction(for card: VaultCard) -> some View {
+        Button {
+            requestSwipeArchive(for: card)
+        } label: {
+            Label("Archive", systemImage: "archivebox")
+        }
+        .tint(VaultTheme.electricBlue)
+        .accessibilityIdentifier("cards.swipe.archive.\(card.id)")
+        .accessibilityLabel("Archive \(card.displayName)")
+        .accessibilityHint("Moves this card out of the Vault")
+    }
+
+    @ViewBuilder
+    private func swipeArchiveToast(for card: VaultCard) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "archivebox.fill")
+                .foregroundStyle(VaultTheme.electricBlue)
+                .accessibilityHidden(true)
+            Text("Card archived")
+                .font(.subheadline.weight(.semibold))
+            Spacer(minLength: 12)
+            Button("Undo") {
+                undoSwipeArchive(card)
+            }
+            .font(.subheadline.weight(.bold))
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+            .accessibilityIdentifier("cards.swipe.archive.undo")
+            .accessibilityLabel("Undo archive")
+            .accessibilityHint("Restores \(card.displayName) to the Vault")
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 8)
+        .frame(maxWidth: 420, minHeight: 56)
+        .vaultGlass(cornerRadius: 20, interactive: true)
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 5)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("cards.swipe.archive.toast")
+        .accessibilityLabel("Card archived")
+        .accessibilityValue("\(card.displayName) moved to Archived Cards")
+    }
+
+    private func requestSwipeArchive(for card: VaultCard) {
+        if model.settings.hasSeenSwipeArchiveConfirmation {
+            archiveFromSwipe(card, markEducationSeen: false)
+        } else {
+            pendingSwipeArchiveEducation = card
+        }
+    }
+
+    private func archiveFromSwipe(_ card: VaultCard, markEducationSeen: Bool) {
+        do {
+            try model.archiveCard(id: card.id)
+            if markEducationSeen {
+                model.markSwipeArchiveConfirmationSeen()
+            }
+            showSwipeArchiveToast(for: card)
+        } catch {
+            model.alertMessage = error.localizedDescription
+        }
+    }
+
+    private func showSwipeArchiveToast(for card: VaultCard) {
+        swipeArchiveDismissTask?.cancel()
+        withAnimation(.snappy) {
+            latestSwipeArchivedCard = card
+        }
+        swipeArchiveDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, latestSwipeArchivedCard?.id == card.id else { return }
+            withAnimation(.snappy) {
+                latestSwipeArchivedCard = nil
+            }
+            swipeArchiveDismissTask = nil
+        }
+    }
+
+    private func undoSwipeArchive(_ card: VaultCard) {
+        swipeArchiveDismissTask?.cancel()
+        swipeArchiveDismissTask = nil
+        do {
+            try model.unarchiveCard(id: card.id)
+            withAnimation(.snappy) {
+                latestSwipeArchivedCard = nil
+            }
+        } catch {
+            withAnimation(.snappy) {
+                latestSwipeArchivedCard = nil
+            }
+            model.alertMessage = error.localizedDescription
+        }
+    }
+
     private func deleteAction(for card: VaultCard) -> some View {
         Button(role: .destructive) {
             pendingDelete = card
@@ -2767,15 +2912,6 @@ struct ArchivedCardsView: View {
             .environment(\.defaultMinListRowHeight, 1)
         }
         .navigationTitle("Archived Cards")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Text("\(model.archivedCards.count)")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Archived card count")
-                    .accessibilityValue("\(model.archivedCards.count)")
-            }
-        }
         .alert("Remove archived card?", isPresented: Binding(
             get: { pendingDelete != nil },
             set: { if !$0 { pendingDelete = nil } }
@@ -2808,13 +2944,6 @@ struct ArchivedCardsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                Button {
-                    model.showVault()
-                } label: {
-                    Label("Back to Vault", systemImage: "arrow.left")
-                }
-                .accessibilityIdentifier("archived.empty.back")
-                .vaultPrimaryButton()
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 28)
