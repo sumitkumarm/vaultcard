@@ -2238,6 +2238,51 @@ struct OnboardingView: View {
     }
 }
 
+private struct VaultBulkActionButtonStyle: ButtonStyle {
+    let tint: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .modifier(VaultBulkActionButtonChrome(tint: tint, isPressed: configuration.isPressed))
+    }
+}
+
+private struct VaultBulkActionButtonChrome: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+    let tint: Color
+    let isPressed: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .foregroundStyle(isEnabled ? tint : Color.secondary.opacity(0.55))
+                .opacity(isEnabled && isPressed ? 0.82 : 1)
+                .scaleEffect(isEnabled && isPressed ? 0.98 : 1)
+                .glassEffect(
+                    .regular
+                        .tint(tint.opacity(isEnabled ? 0.32 : 0.06))
+                        .interactive(isEnabled),
+                    in: .rect(cornerRadius: 18)
+                )
+        } else {
+            content
+                .foregroundStyle(isEnabled ? tint : Color.secondary.opacity(0.55))
+                .opacity(isEnabled && isPressed ? 0.82 : 1)
+                .scaleEffect(isEnabled && isPressed ? 0.98 : 1)
+                .background(
+                    isEnabled ? tint.opacity(isPressed ? 0.2 : 0.12) : Color.secondary.opacity(0.06),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                )
+                .vaultGlass(cornerRadius: 18, interactive: isEnabled)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(isEnabled ? tint.opacity(0.42) : Color.secondary.opacity(0.12), lineWidth: 1)
+                }
+        }
+    }
+}
+
 struct CardListView: View {
     private enum CardFilter: String, CaseIterable {
         case all = "All"
@@ -2257,51 +2302,6 @@ struct CardListView: View {
     @State private var latestSwipeArchivedCard: VaultCard?
     @State private var swipeArchiveDismissTask: Task<Void, Never>?
     @FocusState private var searchIsFocused: Bool
-
-    private struct BulkActionButtonStyle: ButtonStyle {
-        let tint: Color
-
-        func makeBody(configuration: Configuration) -> some View {
-            configuration.label
-                .modifier(BulkActionButtonChrome(tint: tint, isPressed: configuration.isPressed))
-        }
-    }
-
-    private struct BulkActionButtonChrome: ViewModifier {
-        @Environment(\.isEnabled) private var isEnabled
-        let tint: Color
-        let isPressed: Bool
-
-        @ViewBuilder
-        func body(content: Content) -> some View {
-            if #available(iOS 26.0, *) {
-                content
-                    .foregroundStyle(isEnabled ? tint : Color.secondary.opacity(0.55))
-                    .opacity(isEnabled && isPressed ? 0.82 : 1)
-                    .scaleEffect(isEnabled && isPressed ? 0.98 : 1)
-                    .glassEffect(
-                        .regular
-                            .tint(tint.opacity(isEnabled ? 0.32 : 0.06))
-                            .interactive(isEnabled),
-                        in: .rect(cornerRadius: 18)
-                    )
-            } else {
-                content
-                    .foregroundStyle(isEnabled ? tint : Color.secondary.opacity(0.55))
-                    .opacity(isEnabled && isPressed ? 0.82 : 1)
-                    .scaleEffect(isEnabled && isPressed ? 0.98 : 1)
-                    .background(
-                        isEnabled ? tint.opacity(isPressed ? 0.2 : 0.12) : Color.secondary.opacity(0.06),
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    )
-                    .vaultGlass(cornerRadius: 18, interactive: isEnabled)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(isEnabled ? tint.opacity(0.42) : Color.secondary.opacity(0.12), lineWidth: 1)
-                    }
-            }
-        }
-    }
 
     private var visibleCards: [VaultCard] {
         let filtered: [VaultCard]
@@ -2655,7 +2655,7 @@ struct CardListView: View {
             .accessibilityIdentifier("cards.bulk.archive")
             .accessibilityLabel("Archive selected cards")
             .accessibilityValue("\(selectedCardIDs.count) cards selected")
-            .buttonStyle(BulkActionButtonStyle(tint: VaultTheme.electricBlue))
+            .buttonStyle(VaultBulkActionButtonStyle(tint: VaultTheme.electricBlue))
 
             Button(role: .destructive) {
                 isBulkDeleteConfirmationPresented = true
@@ -2669,7 +2669,7 @@ struct CardListView: View {
             .accessibilityIdentifier("cards.bulk.delete")
             .accessibilityLabel("Delete selected cards")
             .accessibilityValue("\(selectedCardIDs.count) cards selected")
-            .buttonStyle(BulkActionButtonStyle(tint: VaultTheme.danger))
+            .buttonStyle(VaultBulkActionButtonStyle(tint: VaultTheme.danger))
         }
     }
 
@@ -2870,6 +2870,9 @@ struct CardListView: View {
 struct ArchivedCardsView: View {
     @Environment(AppModel.self) private var model
     @State private var pendingDelete: VaultCard?
+    @State private var isSelectingCards = false
+    @State private var selectedCardIDs = Set<String>()
+    @State private var isBulkDeleteConfirmationPresented = false
 
     var body: some View {
         ZStack {
@@ -2879,31 +2882,22 @@ struct ArchivedCardsView: View {
                     emptyState
                 } else {
                     Section {
+                        if isSelectingCards {
+                            bulkActionControls
+                                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 12, trailing: 20))
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+                        }
+
                         ForEach(model.sortedArchivedCards) { card in
-                            Button { model.routePath.append(.detail(card.id)) } label: {
-                                VaultSurface(padding: 8) {
-                                    CardRow(card: card)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("archived.card.row.\(card.id)")
-                            .accessibilityLabel("Open archived \(card.displayName)")
-                            .cardListRowStyle(verticalPadding: 4)
-                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                Button {
-                                    restore(cardID: card.id)
-                                } label: {
-                                    Label("Restore", systemImage: "arrow.uturn.backward")
-                                }
-                                .tint(VaultTheme.electricBlue)
-                                .accessibilityIdentifier("archived.restore.\(card.id)")
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                deleteAction(for: card)
+                            if isSelectingCards {
+                                cardSelectionRow(for: card)
+                            } else {
+                                cardNavigationRow(for: card)
                             }
                         }
                     } header: {
-                        Text("\(model.sortedArchivedCards.count) archived card\(model.sortedArchivedCards.count == 1 ? "" : "s")")
+                        selectionHeader
                     }
                 }
             }
@@ -2930,6 +2924,147 @@ struct ArchivedCardsView: View {
         } message: {
             Text("This permanently removes the archived card metadata and secure credentials from this device.")
         }
+        .alert(
+            "Delete \(selectedCardIDs.count) archived card\(selectedCardIDs.count == 1 ? "" : "s")?",
+            isPresented: $isBulkDeleteConfirmationPresented
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete \(selectedCardIDs.count)", role: .destructive) {
+                deleteSelectedCards()
+            }
+            .accessibilityIdentifier("archived.bulk.delete.confirm")
+        } message: {
+            Text("This permanently removes the selected card metadata and secure credentials from this device.")
+        }
+        .onDisappear {
+            cancelSelection()
+        }
+    }
+
+    private var selectionHeader: some View {
+        HStack {
+            Text(
+                isSelectingCards
+                    ? "\(selectedCardIDs.count) Selected"
+                    : "\(model.sortedArchivedCards.count) archived card\(model.sortedArchivedCards.count == 1 ? "" : "s")"
+            )
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
+            Spacer()
+            if isSelectingCards {
+                Button(action: cancelSelection) {
+                    Text("Cancel")
+                        .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                        .contentShape(Rectangle())
+                }
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("archived.bulk.cancel")
+                .accessibilityLabel("Cancel archived card selection")
+            } else {
+                Button("Select") {
+                    beginSelection()
+                }
+                .font(.subheadline.weight(.semibold))
+                .accessibilityIdentifier("archived.bulk.select")
+                .accessibilityLabel("Select archived cards")
+            }
+        }
+        .textCase(nil)
+    }
+
+    @ViewBuilder
+    private var bulkActionControls: some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 12) {
+                bulkActionButtons
+            }
+        } else {
+            bulkActionButtons
+        }
+    }
+
+    private var bulkActionButtons: some View {
+        HStack(spacing: 12) {
+            Button {
+                restoreSelectedCards()
+            } label: {
+                Label("Restore", systemImage: "arrow.uturn.backward")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .contentShape(Rectangle())
+            }
+            .disabled(selectedCardIDs.isEmpty)
+            .accessibilityIdentifier("archived.bulk.restore")
+            .accessibilityLabel("Restore selected cards")
+            .accessibilityValue("\(selectedCardIDs.count) cards selected")
+            .buttonStyle(VaultBulkActionButtonStyle(tint: VaultTheme.electricBlue))
+
+            Button(role: .destructive) {
+                isBulkDeleteConfirmationPresented = true
+            } label: {
+                Label("Delete", systemImage: "trash")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .contentShape(Rectangle())
+            }
+            .disabled(selectedCardIDs.isEmpty)
+            .accessibilityIdentifier("archived.bulk.delete")
+            .accessibilityLabel("Delete selected archived cards")
+            .accessibilityValue("\(selectedCardIDs.count) cards selected")
+            .buttonStyle(VaultBulkActionButtonStyle(tint: VaultTheme.danger))
+        }
+    }
+
+    private func cardNavigationRow(for card: VaultCard) -> some View {
+        Button { model.routePath.append(.detail(card.id)) } label: {
+            VaultSurface(padding: 8) {
+                CardRow(card: card)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("archived.card.row.\(card.id)")
+        .accessibilityLabel("Open archived \(card.displayName)")
+        .cardListRowStyle(verticalPadding: 4)
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            Button {
+                restore(cardID: card.id)
+            } label: {
+                Label("Restore", systemImage: "arrow.uturn.backward")
+            }
+            .tint(VaultTheme.electricBlue)
+            .accessibilityIdentifier("archived.restore.\(card.id)")
+            .accessibilityLabel("Restore \(card.displayName)")
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            deleteAction(for: card)
+        }
+    }
+
+    private func cardSelectionRow(for card: VaultCard) -> some View {
+        let isSelected = selectedCardIDs.contains(card.id)
+        return Button {
+            withAnimation(.snappy) {
+                toggleSelection(for: card.id)
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? VaultTheme.electricBlue : .secondary)
+                    .accessibilityHidden(true)
+                VaultSurface(padding: 8) {
+                    CardRow(card: card)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("archived.bulk.select.\(card.id)")
+        .accessibilityLabel("Select \(card.displayName)")
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .cardListRowStyle(verticalPadding: 4)
     }
 
     private var emptyState: some View {
@@ -2954,6 +3089,44 @@ struct ArchivedCardsView: View {
     private func restore(cardID: String) {
         do {
             try model.unarchiveCard(id: cardID)
+        } catch {
+            model.alertMessage = error.localizedDescription
+        }
+    }
+
+    private func beginSelection() {
+        selectedCardIDs.removeAll()
+        isSelectingCards = true
+    }
+
+    private func cancelSelection() {
+        selectedCardIDs.removeAll()
+        isSelectingCards = false
+    }
+
+    private func toggleSelection(for cardID: String) {
+        if selectedCardIDs.contains(cardID) {
+            selectedCardIDs.remove(cardID)
+        } else {
+            selectedCardIDs.insert(cardID)
+        }
+    }
+
+    private func restoreSelectedCards() {
+        guard !selectedCardIDs.isEmpty else { return }
+        do {
+            try model.unarchiveCards(ids: selectedCardIDs)
+            cancelSelection()
+        } catch {
+            model.alertMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteSelectedCards() {
+        guard !selectedCardIDs.isEmpty else { return }
+        do {
+            try model.deleteCards(ids: selectedCardIDs)
+            cancelSelection()
         } catch {
             model.alertMessage = error.localizedDescription
         }
