@@ -24,3 +24,13 @@
 /windows/flutter/ephemeral/
 *.iml
 *.log
+
+# Local macOS and Codex working files
+.DS_Store
+/.codex-tmp/
+
+# Xcode per-user state
+**/xcuserdata/
+
+# Generated artifact inspection output
+*.inspect.ndjson

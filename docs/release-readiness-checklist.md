@@ -3,14 +3,14 @@
 ## Product and Policy
 
 - finalize privacy policy copy for secure storage, biometrics, camera OCR, and notifications
-- confirm whether live balance refresh remains disabled for GiftCardMall until a browser-mediated flow exists
+- validate the browser-mediated GiftCardMall balance capture against real Visa and Mastercard prepaid cards
 - document supported gift card issuers and unsupported cases inside onboarding/help copy
 
 ## Android
 
 - verify camera capture on a physical Android device
 - verify biometric unlock on at least one enrolled device
-- verify background refresh scheduling, retry behavior, and notification delivery after device reboot
+- verify local notification delivery after device reboot for configured expiry and low-balance alerts
 - confirm secure display behavior in app switcher and screenshots
 
 ## iOS
@@ -19,13 +19,15 @@
 - build, sign, and launch on a physical iPhone
 - verify Face ID or passcode unlock flow
 - verify camera OCR permissions and capture flow
-- verify local notifications and background refresh constraints on device
+- verify local notifications and foreground balance-check failure handling on device
+- verify the direct foreground GiftCardMall balance-check copy and embedded-page form positioning on a physical iPhone
+- verify a confirmed GiftCardMall balance immediately updates the card detail and vault list
 
 ## Quality
 
 - run `flutter analyze`
 - run `flutter test --no-test-assets`
-- add integration or device tests for camera capture and background work where CI devices are available
+- add integration or device tests for camera capture and the foreground GiftCardMall browser flow where CI devices are available
 - review crash reporting wiring before enabling distribution builds
 
 ## Distribution

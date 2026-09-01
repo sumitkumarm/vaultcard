@@ -24,8 +24,8 @@ final class VaultCardUITests: XCTestCase {
         XCTAssertTrue(addButton.waitForExistence(timeout: 5))
         addButton.tap()
 
-        XCTAssertTrue(app.buttons["add.manual"].waitForExistence(timeout: 5))
-        app.buttons["add.manual"].tap()
+        XCTAssertTrue(app.buttons["scan.enterManually"].waitForExistence(timeout: 5))
+        app.buttons["scan.enterManually"].tap()
 
         let cardNumber = app.textFields["manual.cardNumber"]
         XCTAssertTrue(cardNumber.waitForExistence(timeout: 5))
@@ -47,13 +47,30 @@ final class VaultCardUITests: XCTestCase {
         app.buttons["manual.save"].tap()
 
         XCTAssertTrue(app.buttons["detail.reveal"].waitForExistence(timeout: 5))
+        let refresh = app.buttons["detail.refresh"]
+        XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["detail.reveal"].frame.height, refresh.frame.height, accuracy: 1)
+        XCTAssertEqual(app.buttons["detail.reveal"].frame.width, refresh.frame.width, accuracy: 1)
         XCTAssertTrue(app.staticTexts["**** **** **** 1111"].waitForExistence(timeout: 5))
 
         app.buttons["detail.reveal"].tap()
-        XCTAssertTrue(app.staticTexts["4111111111111111"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["4111 1111 1111 1111"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["123"].waitForExistence(timeout: 5))
 
-        app.buttons["detail.delete"].tap()
-        let confirmDelete = app.buttons["detail.confirmDelete"].firstMatch
+        let backToVault = app.buttons["BackButton"]
+        XCTAssertTrue(backToVault.waitForExistence(timeout: 5))
+        backToVault.tap()
+        // A single saved card is shown directly; the stack expand/collapse affordance
+        // is only meaningful when there are multiple cards.
+        XCTAssertFalse(app.buttons["cards.stack.expand"].exists)
+        let singleCard = app.buttons["card.row.1111"]
+        XCTAssertTrue(singleCard.waitForExistence(timeout: 5))
+        singleCard.swipeLeft()
+        let swipeDelete = app.buttons["Delete"].firstMatch
+        XCTAssertTrue(swipeDelete.waitForExistence(timeout: 5))
+        swipeDelete.tap()
+
+        let confirmDelete = app.alerts["Remove card?"].buttons["Delete"]
         XCTAssertTrue(confirmDelete.waitForExistence(timeout: 5))
         confirmDelete.tap()
 
@@ -70,15 +87,33 @@ final class VaultCardUITests: XCTestCase {
         let addButton = app.buttons["cards.add"].firstMatch.exists ? app.buttons["cards.add"].firstMatch : app.buttons["cards.empty.add"].firstMatch
         XCTAssertTrue(addButton.waitForExistence(timeout: 5))
         addButton.tap()
-        XCTAssertTrue(app.buttons["add.manual"].waitForExistence(timeout: 5))
-        app.buttons["add.manual"].tap()
+        XCTAssertTrue(app.buttons["scan.enterManually"].waitForExistence(timeout: 5))
+        app.buttons["scan.enterManually"].tap()
 
         XCTAssertTrue(app.textFields["manual.cardNumber"].waitForExistence(timeout: 5))
         app.textFields["manual.cardNumber"].tap()
         app.textFields["manual.cardNumber"].typeText("123")
         app.buttons["manual.save"].tap()
 
-        XCTAssertTrue(app.staticTexts["Enter a valid Visa or Mastercard number."].waitForExistence(timeout: 5))
+        let validationMessage = app.staticTexts["Enter a valid Visa or Mastercard number."]
+        XCTAssertTrue(validationMessage.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(validationMessage.frame.height, 24)
+    }
+
+    func testDefaultAddOpensScannerAndDisablesCurrentAddAction() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launch()
+
+        completeOnboardingIfNeeded(app)
+
+        let addButton = app.buttons["cards.add"].firstMatch.exists ? app.buttons["cards.add"].firstMatch : app.buttons["cards.empty.add"].firstMatch
+        XCTAssertTrue(addButton.waitForExistence(timeout: 5))
+        addButton.tap()
+        XCTAssertTrue(app.buttons["scan.enterManually"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.switches["scan.textFallbackToggle"].exists)
+        XCTAssertTrue(app.buttons["cards.add"].exists)
+        XCTAssertFalse(app.buttons["cards.add"].isEnabled)
     }
 
     private func completeOnboardingIfNeeded(_ app: XCUIApplication) {

@@ -1,17 +1,17 @@
 # VaultCard
 
-VaultCard is a privacy-first prepaid Visa/Mastercard gift card manager built as a Flutter mobile app for iOS and Android.
+VaultCard is a privacy-first prepaid Visa/Mastercard gift card manager. The active iOS implementation is native SwiftUI in `ios-native/`; the earlier Flutter scaffold remains as a cross-platform reference.
 
 ## Current State
 
-This repository was scaffolded manually because the local machine does not currently have `flutter`, `dart`, or `java` installed. The codebase includes:
+The native iOS app currently includes:
 
-- app shell, navigation, theming, and Riverpod wiring
-- core domain models, repositories, and local service abstractions
-- manual card management flows
-- security/reveal flows with injectable biometric abstractions
-- balance-refresh orchestration, parser config abstraction, and GiftCardMall parsing fixtures
-- tests for core business rules and repository/service behavior
+- adaptive light/midnight-blue SwiftUI design with iOS 26 Liquid Glass controls and iOS 17 material fallbacks
+- camera scanning with explicit card number, expiration, and CVV confirmation
+- Keychain-backed credentials with authenticated full-number and CVV reveal
+- user-initiated GiftCardMall balance checks in a secure embedded browser
+- WebKit capture of confirmed balances and transactions back into the local vault
+- SwiftData metadata storage plus unit and Simulator UI coverage
 
 ## Required Local Setup
 
@@ -22,7 +22,7 @@ Before the app can be run or platform projects can be generated, install:
 - JDK 17
 - Android Studio + Android SDK
 
-Windows cannot complete iOS build validation. A macOS environment with Xcode is still required for iOS signing, biometric checks, background task verification, and App Store packaging.
+The native app builds and runs locally with Xcode. Physical-device validation is still required for camera capture, Face ID, embedded GiftCardMall checks, and final signing behavior.
 
 ## Suggested Bootstrap Commands
 
@@ -41,4 +41,4 @@ flutter test
 - Sensitive card credentials are modeled separately from card metadata.
 - Parser config is local for MVP but accessed through an interface so it can move to remote config later.
 - Telemetry is intentionally no-op by default.
-- The direct HTTP GiftCardMall flow is implemented behind abstractions and still requires live validation before production use.
+- GiftCardMall checks are foreground-only: Check Balance opens the embedded site directly, autofills saved credentials, and persists confirmed balances and transactions immediately.

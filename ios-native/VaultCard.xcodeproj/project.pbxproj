@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -12,6 +12,7 @@
 		111111111111111111111103 /* VaultCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111003 /* VaultCardTests.swift */; };
 		111111111111111111111104 /* VaultCardUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111004 /* VaultCardUITests.swift */; };
 		111111111111111111111105 /* ParserConfig.json in Resources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111009 /* ParserConfig.json */; };
+		111111111111111111111106 /* VaultCardDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111010 /* VaultCardDesign.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -41,6 +42,7 @@
 		111111111111111111111007 /* VaultCardTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VaultCardTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		111111111111111111111008 /* VaultCardUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VaultCardUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		111111111111111111111009 /* ParserConfig.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = ParserConfig.json; sourceTree = "<group>"; };
+		111111111111111111111010 /* VaultCardDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultCardDesign.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -82,6 +84,7 @@
 			isa = PBXGroup;
 			children = (
 				111111111111111111111001 /* VaultCardApp.swift */,
+				111111111111111111111010 /* VaultCardDesign.swift */,
 				111111111111111111111005 /* Info.plist */,
 				111111111111111111111009 /* ParserConfig.json */,
 				111111111111111111111002 /* Assets.xcassets */,
@@ -246,6 +249,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				111111111111111111111101 /* VaultCardApp.swift in Sources */,
+				111111111111111111111106 /* VaultCardDesign.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -360,6 +364,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2829H6AD46;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VaultCard/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -379,6 +384,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2829H6AD46;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VaultCard/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

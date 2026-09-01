@@ -1,5 +1,5 @@
 import AVFoundation
-import BackgroundTasks
+import CoreImage
 import Foundation
 import LocalAuthentication
 import Observation
@@ -40,7 +40,22 @@ enum CardSortOption: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum AddCardPreference: String, Codable, CaseIterable, Identifiable {
+    case scan
+    case manual
+
+    var id: String { rawValue }
+    var label: String { self == .scan ? "Scan Card" : "Enter Manually" }
+}
+
 struct VaultCard: Identifiable, Equatable {
+    enum BalanceFreshness: Equatable {
+        case upToDate
+        case needsRefresh
+    }
+
+    static let balanceFreshnessInterval: TimeInterval = 24 * 60 * 60
+
     var id: String
     var nickname: String?
     var network: CardNetwork
@@ -59,9 +74,11 @@ struct VaultCard: Identifiable, Equatable {
         return trimmed?.isEmpty == false ? trimmed! : "**** \(last4)"
     }
 
-    var isRefreshCoolingDown: Bool {
-        guard let refreshBlockedUntil else { return false }
-        return refreshBlockedUntil > Date()
+    func balanceFreshness(at date: Date = Date()) -> BalanceFreshness {
+        guard fetchFailureCount == 0, let lastFetchedAt else { return .needsRefresh }
+        return date.timeIntervalSince(lastFetchedAt) <= Self.balanceFreshnessInterval
+            ? .upToDate
+            : .needsRefresh
     }
 }
 
@@ -80,7 +97,7 @@ struct CardCredentials: Codable, Equatable {
 
     var last4: String { String(cardNumber.suffix(4)) }
     var expiryMonth: String { expiry.split(separator: "/").first.map { String($0).leftPadded(to: 2) } ?? "00" }
-    var expiryYear: String { "20" + (expiry.split(separator: "/").last.map { String($0).leftPadded(to: 2) } ?? "00") }
+    var expiryYear: String { expiry.split(separator: "/").last.map { String($0).leftPadded(to: 2) } ?? "00" }
 }
 
 struct CardInput: Equatable {
@@ -111,6 +128,28 @@ struct AppSettings: Codable, Equatable {
     var analyticsEnabled = false
     var sortOption = CardSortOption.dateAddedNewest
     var notificationPreferences = NotificationPreferences()
+    var addCardPreference = AddCardPreference.scan
+
+    private enum CodingKeys: String, CodingKey {
+        case onboardingCompleted
+        case appLockEnabled
+        case analyticsEnabled
+        case sortOption
+        case notificationPreferences
+        case addCardPreference
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        onboardingCompleted = try values.decodeIfPresent(Bool.self, forKey: .onboardingCompleted) ?? false
+        appLockEnabled = try values.decodeIfPresent(Bool.self, forKey: .appLockEnabled) ?? false
+        analyticsEnabled = try values.decodeIfPresent(Bool.self, forKey: .analyticsEnabled) ?? false
+        sortOption = try values.decodeIfPresent(CardSortOption.self, forKey: .sortOption) ?? .dateAddedNewest
+        notificationPreferences = try values.decodeIfPresent(NotificationPreferences.self, forKey: .notificationPreferences) ?? NotificationPreferences()
+        addCardPreference = try values.decodeIfPresent(AddCardPreference.self, forKey: .addCardPreference) ?? .scan
+    }
 }
 
 struct BalanceResult: Equatable {
@@ -154,6 +193,15 @@ struct ScanCandidate: Codable, Hashable {
 }
 
 enum CardRules {
+    private static let nicknameAdjectives = [
+        "Brave", "Clever", "Cosmic", "Golden", "Noble", "Swift", "Velvet", "Wandering",
+        "Bright", "Daring", "Electric", "Lucky", "Mighty", "Radiant", "Silver", "Stellar"
+    ]
+    private static let nicknameCharacters = [
+        "Athena", "Merlin", "Mulan", "Odysseus", "Orion", "Phoenix", "Robin", "Sherlock",
+        "Artemis", "Gandalf", "Leia", "Loki", "Ripley", "Spock", "Storm", "Zorro"
+    ]
+
     static func inferNetwork(_ cardNumber: String) -> CardNetwork {
         let sanitized = digitsOnly(cardNumber)
         if sanitized.hasPrefix("4") { return .visa }
@@ -199,8 +247,35 @@ enum CardRules {
         return "\(digits.prefix(2))/\(digits.dropFirst(2))"
     }
 
+    static func formatCardNumber(_ value: String) -> String {
+        let digits = String(digitsOnly(value).prefix(16))
+        return stride(from: 0, to: digits.count, by: 4).map { start in
+            let lower = digits.index(digits.startIndex, offsetBy: start)
+            let upper = digits.index(lower, offsetBy: min(4, digits.count - start))
+            return String(digits[lower..<upper])
+        }.joined(separator: " ")
+    }
+
     static func mask(last4: String) -> String { "**** **** **** \(last4)" }
     static func digitsOnly(_ value: String) -> String { value.filter(\.isNumber) }
+
+    static func suggestedNickname(for cardNumber: String) -> String {
+        suggestedNickname(for: cardNumber, avoiding: [])
+    }
+
+    static func suggestedNickname(for cardNumber: String, avoiding existingNames: Set<String>) -> String {
+        let digits = digitsOnly(cardNumber)
+        let seed = digits.reduce(0) { ($0 &* 31 &+ ($1.wholeNumberValue ?? 0)) % 10_000 }
+        let normalizedExisting = Set(existingNames.map { $0.lowercased() })
+        let combinations = nicknameAdjectives.count * nicknameCharacters.count
+        for offset in 0..<combinations {
+            let adjective = nicknameAdjectives[(seed + offset) % nicknameAdjectives.count]
+            let characterIndex = (seed / nicknameAdjectives.count + offset * 7) % nicknameCharacters.count
+            let suggestion = "\(adjective) \(nicknameCharacters[characterIndex])"
+            if !normalizedExisting.contains(suggestion.lowercased()) { return suggestion }
+        }
+        return "Vault Card \(existingNames.count + 1)"
+    }
 
     static func sorted(_ cards: [VaultCard], by option: CardSortOption) -> [VaultCard] {
         switch option {
@@ -359,19 +434,19 @@ protocol BalanceRefreshing {
     func refreshCard(_ cardID: String, ignoreCooldown: Bool, preferences: NotificationPreferences) async -> RefreshOutcome
 }
 
+enum ScanRecognitionMode {
+    case live
+    case still
+}
+
 protocol CardScanning {
-    func extractCandidates(from image: CGImage) async throws -> ScanCandidate
+    func extractCandidates(from image: CGImage, mode: ScanRecognitionMode) async throws -> ScanCandidate
     func extractCandidates(from text: String) -> ScanCandidate
 }
 
 protocol NotificationScheduling {
     func requestAuthorization() async
     func syncForCard(_ card: VaultCard, preferences: NotificationPreferences) async
-}
-
-protocol BackgroundRefreshRegistering {
-    func register()
-    func scheduleStaleCheck()
 }
 
 final class KeychainCredentialStore: CredentialStore {
@@ -497,7 +572,17 @@ final class SwiftDataCardRepository: CardRepository {
 
     func getCards() throws -> [VaultCard] {
         let records = try context.fetch(FetchDescriptor<SchemaV1.CardMetadataRecord>())
-        return try records.map { try makeCard(from: $0) }
+        let transactionRecords = try context.fetch(FetchDescriptor<SchemaV1.TransactionRecord>(
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        ))
+        let transactionsByCard = Dictionary(grouping: transactionRecords, by: \.cardId).mapValues { records in
+            records.map {
+                CardTransaction(id: $0.id, date: $0.date, description: $0.transactionDescription, amount: $0.amount)
+            }
+        }
+        return try records.map {
+            try makeCard(from: $0, loadedTransactions: transactionsByCard[$0.id] ?? [])
+        }
     }
 
     func getCard(id: String) throws -> VaultCard? {
@@ -619,7 +704,7 @@ final class SwiftDataCardRepository: CardRepository {
         }
     }
 
-    private func makeCard(from record: SchemaV1.CardMetadataRecord) throws -> VaultCard {
+    private func makeCard(from record: SchemaV1.CardMetadataRecord, loadedTransactions: [CardTransaction]? = nil) throws -> VaultCard {
         VaultCard(
             id: record.id,
             nickname: record.nickname,
@@ -627,7 +712,7 @@ final class SwiftDataCardRepository: CardRepository {
             last4: record.last4,
             expiry: record.expiry,
             balance: record.balance,
-            transactions: try transactions(cardID: record.id),
+            transactions: try loadedTransactions ?? transactions(cardID: record.id),
             lastFetchedAt: record.lastFetchedAt,
             fetchFailureCount: record.fetchFailureCount,
             addedAt: record.addedAt,
@@ -728,31 +813,6 @@ final class NotificationService: NSObject, NotificationScheduling, UNUserNotific
         guard parts.count == 2 else { return nil }
         return Calendar.current.date(from: DateComponents(year: 2000 + parts[1], month: parts[0] + 1, day: 0, hour: 12))
     }
-}
-
-final class BackgroundRefreshService: BackgroundRefreshRegistering {
-    static let taskIdentifier = "com.vaultcard.ios.stale-check"
-    private static var didRegister = false
-
-    func register() {
-        guard !Self.didRegister else { return }
-        Self.didRegister = true
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.taskIdentifier, using: nil) { task in
-            task.expirationHandler = { task.setTaskCompleted(success: false) }
-            task.setTaskCompleted(success: true)
-        }
-    }
-
-    func scheduleStaleCheck() {
-        let request = BGAppRefreshTaskRequest(identifier: Self.taskIdentifier)
-        request.earliestBeginDate = Date().addingTimeInterval(24 * 60 * 60)
-        try? BGTaskScheduler.shared.submit(request)
-    }
-}
-
-struct NoopBackgroundRefreshService: BackgroundRefreshRegistering {
-    func register() {}
-    func scheduleStaleCheck() {}
 }
 
 struct ParserConfig: Codable {
@@ -947,6 +1007,56 @@ enum GiftCardMallBridge {
               }, payload));
             } catch (_) {}
           };
+
+          const cardSelectors = [
+            'input[name="cardNumber"]',
+            'input[id*="cardNumber"]',
+            'input[autocomplete="cc-number"]',
+            'input[inputmode="numeric"]'
+          ];
+          let autoScrollEnabled = true;
+          window.__vaultCardScrollToForm = (force = false) => {
+            if (!force && !autoScrollEnabled) { return false; }
+            const field = cardSelectors.map(selector => document.querySelector(selector)).find(Boolean);
+            if (!field) { return false; }
+            const target = field.closest('form') || field;
+            target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+            return true;
+          };
+
+          const stopAutoScroll = () => { autoScrollEnabled = false; };
+          document.addEventListener('pointerdown', stopAutoScroll, true);
+          document.addEventListener('touchstart', stopAutoScroll, true);
+
+          document.addEventListener('submit', stopAutoScroll, true);
+          document.addEventListener('click', event => {
+            const control = event.target && event.target.closest && event.target.closest('button, input[type="submit"]');
+            if (!control) { return; }
+            const type = (control.getAttribute('type') || '').toLowerCase();
+            if (control.tagName === 'BUTTON' || type === 'submit') { stopAutoScroll(); }
+          }, true);
+
+          let lastDOMBalance = null;
+          const inspectBalance = () => {
+            const selectors = [
+              '.balance-amount',
+              '[data-testid*="balance"]',
+              '[class*="balanceAmount"]',
+              '[class*="balance-amount"]'
+            ];
+            for (const selector of selectors) {
+              for (const element of document.querySelectorAll(selector)) {
+                const match = (element.textContent || '').replace(/,/g, '').match(/\\$\\s*([0-9]+(?:\\.[0-9]{1,2})?)/);
+                if (!match) { continue; }
+                const balance = Number(match[1]);
+                if (!Number.isFinite(balance) || balance < 0 || balance === lastDOMBalance) { continue; }
+                lastDOMBalance = balance;
+                post({ kind: 'domBalance', balance });
+                return;
+              }
+            }
+          };
+
           const originalFetch = window.fetch;
           window.fetch = async (...args) => {
             const response = await originalFetch(...args);
@@ -965,6 +1075,40 @@ enum GiftCardMallBridge {
             } catch (_) {}
             return response;
           };
+
+          const originalOpen = XMLHttpRequest.prototype.open;
+          const originalSend = XMLHttpRequest.prototype.send;
+          XMLHttpRequest.prototype.open = function(method, url) {
+            this.__vaultCardMethod = method || 'GET';
+            this.__vaultCardURL = url || '';
+            return originalOpen.apply(this, arguments);
+          };
+          XMLHttpRequest.prototype.send = function(body) {
+            this.__vaultCardBody = body || null;
+            this.addEventListener('load', () => {
+              try {
+                post({
+                  kind: 'networkCapture',
+                  url: this.__vaultCardURL || '',
+                  method: this.__vaultCardMethod || 'GET',
+                  requestBody: typeof this.__vaultCardBody === 'string' ? this.__vaultCardBody : null,
+                  responseBody: typeof this.responseText === 'string' ? this.responseText : '',
+                  status: this.status
+                });
+              } catch (_) {}
+            });
+            return originalSend.apply(this, arguments);
+          };
+
+          const observer = new MutationObserver(() => {
+            if (autoScrollEnabled) { window.__vaultCardScrollToForm(); }
+            inspectBalance();
+          });
+          observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+          [100, 450, 1200, 2500].forEach(delay => setTimeout(() => {
+            if (autoScrollEnabled) { window.__vaultCardScrollToForm(); }
+            inspectBalance();
+          }, delay));
         })();
         """
     }
@@ -981,17 +1125,24 @@ enum GiftCardMallBridge {
               const field = document.querySelector(selector);
               if (!field) { continue; }
               field.focus();
-              field.value = value;
+              const prototype = field.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+              const setter = Object.getOwnPropertyDescriptor(prototype, 'value') && Object.getOwnPropertyDescriptor(prototype, 'value').set;
+              if (setter) { setter.call(field, value); } else { field.value = value; }
               field.dispatchEvent(new Event('input', { bubbles: true }));
               field.dispatchEvent(new Event('change', { bubbles: true }));
               return true;
             }
             return false;
           };
-          setValue(['input[name="cardNumber"]','input[id*="cardNumber"]','input[autocomplete="cc-number"]','input[inputmode="numeric"]'], \(number));
-          setValue(['input[name="expirationMonth"]','input[id*="expirationMonth"]','select[name="expirationMonth"]','input[name="expMonth"]'], \(month));
-          setValue(['input[name="expirationYear"]','input[id*="expirationYear"]','select[name="expirationYear"]','input[name="expYear"]'], \(year));
-          setValue(['input[name="securityCode"]','input[id*="securityCode"]','input[name="cvv"]','input[id*="cvv"]','input[autocomplete="cc-csc"]'], \(cvv));
+          const fill = () => {
+            setValue(['input[name="cardNumber"]','input[id*="cardNumber"]','input[autocomplete="cc-number"]','input[inputmode="numeric"]'], \(number));
+            setValue(['input[name="expirationMonth"]','input[id*="expirationMonth"]','select[name="expirationMonth"]','input[name="expMonth"]'], \(month));
+            setValue(['input[name="expirationYear"]','input[id*="expirationYear"]','select[name="expirationYear"]','input[name="expYear"]'], \(year));
+            setValue(['input[name="securityCode"]','input[id*="securityCode"]','input[name="cvv"]','input[id*="cvv"]','input[autocomplete="cc-csc"]'], \(cvv));
+            if (window.__vaultCardScrollToForm) { window.__vaultCardScrollToForm(true); }
+          };
+          fill();
+          [250, 800, 1600].forEach(delay => setTimeout(fill, delay));
         })();
         """
     }
@@ -1009,9 +1160,23 @@ enum GiftCardMallBridge {
               let payload = body as? [String: Any],
               payload["namespace"] as? String == handlerName,
               payload["parserVersion"] as? Int == parserVersion,
-              payload["kind"] as? String == "networkCapture",
               let pageHost = payload["pageHost"] as? String,
-              allowedHosts.contains(pageHost.lowercased()),
+              allowedHosts.contains(pageHost.lowercased())
+        else { return nil }
+
+        if payload["kind"] as? String == "domBalance" {
+            guard let balance = (payload["balance"] as? NSNumber)?.doubleValue, balance >= 0 else {
+                throw VaultError.webBridge("Invalid balance value.")
+            }
+            return GiftCardMallSummaryCapture(
+                balance: balance,
+                currencyCode: "USD",
+                accessToken: "",
+                rmsSessionId: ""
+            )
+        }
+
+        guard payload["kind"] as? String == "networkCapture",
               let url = payload["url"] as? String,
               url.contains("/api/card/getCardBalanceSummary"),
               let responseBody = payload["responseBody"] as? String,
@@ -1023,7 +1188,9 @@ enum GiftCardMallBridge {
         else { return nil }
         let requestBody = (payload["requestBody"] as? String)?.data(using: .utf8)
         let request = requestBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-        let balance = (balances["closingBalance"] as? NSNumber)?.doubleValue ?? 0
+        guard let balance = (balances["closingBalance"] as? NSNumber)?.doubleValue else {
+            throw VaultError.webBridge("GiftCardMall returned a balance response without a balance value.")
+        }
         guard balance >= 0 else { throw VaultError.webBridge("Invalid balance value.") }
         return GiftCardMallSummaryCapture(
             balance: balance,
@@ -1047,15 +1214,107 @@ enum GiftCardMallBridge {
               json["success"] as? Bool == true,
               let result = json["result"] as? [String: Any]
         else { return nil }
-        let transactions = (result["transactions"] as? [[String: Any]] ?? []).compactMap { item -> CardTransaction? in
-            let description = (item["merchantDescription"] as? String) ?? (item["description"] as? String) ?? "GiftCardMall transaction"
-            guard let amount = (item["amount"] as? NSNumber)?.doubleValue,
-                  let dateString = item["transactionDate"] as? String,
-                  let date = ISO8601DateFormatter().date(from: dateString) ?? DateFormatter.yyyyMMdd.date(from: dateString)
-            else { return nil }
-            return CardTransaction(date: date, description: description.trimmingCharacters(in: .whitespacesAndNewlines), amount: amount)
+        guard let items = transactionItems(in: result) else {
+            throw VaultError.webBridge("GiftCardMall returned an unrecognized transaction response.")
+        }
+        let transactions = items.compactMap(parseTransaction)
+        if !items.isEmpty, transactions.isEmpty {
+            throw VaultError.webBridge("GiftCardMall returned transaction rows in an unsupported format.")
         }
         return BalanceResult(balance: summary.balance, transactions: transactions, fetchedAt: Date())
+    }
+
+    private static func transactionItems(in value: Any, depth: Int = 0) -> [[String: Any]]? {
+        guard depth <= 4, let dictionary = value as? [String: Any] else { return nil }
+        let preferredKeys = [
+            "transactions", "transactionHistory", "transactionDetails", "cardTransactions",
+            "items", "records", "content", "data", "results"
+        ]
+
+        for preferredKey in preferredKeys {
+            guard let key = dictionary.keys.first(where: { $0.caseInsensitiveCompare(preferredKey) == .orderedSame }) else { continue }
+            if let items = dictionary[key] as? [[String: Any]] { return items }
+            if let nested = transactionItems(in: dictionary[key] as Any, depth: depth + 1) { return nested }
+        }
+
+        for nestedValue in dictionary.values {
+            if let items = nestedValue as? [[String: Any]], items.contains(where: looksLikeTransaction) {
+                return items
+            }
+            if let nested = transactionItems(in: nestedValue, depth: depth + 1) { return nested }
+        }
+        return nil
+    }
+
+    private static func looksLikeTransaction(_ item: [String: Any]) -> Bool {
+        value(in: item, aliases: ["amount", "transactionAmount", "transactionValue", "value", "debitAmount"]) != nil
+            && value(in: item, aliases: ["transactionDate", "transactionDateTime", "date", "postedDate", "postingDate", "timestamp"]) != nil
+    }
+
+    private static func parseTransaction(_ item: [String: Any]) -> CardTransaction? {
+        guard let amount = transactionAmount(value(in: item, aliases: [
+            "amount", "transactionAmount", "transactionValue", "value", "debitAmount", "loadAmount"
+        ])), let date = firstTransactionDate(in: item) else { return nil }
+
+        let description = (value(in: item, aliases: [
+            "merchantDescription", "transactionDescription", "description", "merchantName", "merchant", "memo", "type"
+        ]) as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty ?? "GiftCardMall transaction"
+        return CardTransaction(date: date, description: description, amount: amount)
+    }
+
+    private static func firstTransactionDate(in item: [String: Any]) -> Date? {
+        let aliases = [
+            "transactionDate", "transactionDateTime", "date", "postedDate", "postingDate",
+            "timestamp", "createdAt", "transDate", "settlementDate"
+        ]
+        for alias in aliases {
+            if let rawValue = value(in: item, aliases: [alias]), let date = transactionDate(rawValue) {
+                return date
+            }
+        }
+        return nil
+    }
+
+    private static func value(in item: [String: Any], aliases: [String]) -> Any? {
+        for alias in aliases {
+            if let key = item.keys.first(where: { $0.caseInsensitiveCompare(alias) == .orderedSame }) {
+                return item[key]
+            }
+        }
+        return nil
+    }
+
+    private static func transactionAmount(_ value: Any?) -> Double? {
+        if let number = value as? NSNumber { return number.doubleValue }
+        guard let text = value as? String else { return nil }
+        let negativeParentheses = text.contains("(") && text.contains(")")
+        let normalized = text.filter { $0.isNumber || $0 == "." || $0 == "-" }
+        guard var amount = Double(normalized) else { return nil }
+        if negativeParentheses, amount > 0 { amount *= -1 }
+        return amount
+    }
+
+    private static func transactionDate(_ value: Any?) -> Date? {
+        if let number = value as? NSNumber {
+            let raw = number.doubleValue
+            return Date(timeIntervalSince1970: raw > 10_000_000_000 ? raw / 1_000 : raw)
+        }
+        guard let text = value as? String else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let epochRange = trimmed.range(of: #"/Date\((-?\d{10,13})"#, options: .regularExpression) {
+            let epochText = trimmed[epochRange].filter { $0.isNumber || $0 == "-" }
+            if let raw = Double(epochText) {
+                return Date(timeIntervalSince1970: abs(raw) > 10_000_000_000 ? raw / 1_000 : raw)
+            }
+        }
+        if let raw = Double(trimmed), trimmed.allSatisfy({ $0.isNumber || $0 == "." || $0 == "-" }) {
+            return Date(timeIntervalSince1970: abs(raw) > 10_000_000_000 ? raw / 1_000 : raw)
+        }
+        if let date = ISO8601DateFormatter().date(from: trimmed) { return date }
+        if let date = DateFormatter.giftCardISO8601Fractional.date(from: trimmed) { return date }
+        return DateFormatter.giftCardTransactionDates.lazy.compactMap { $0.date(from: trimmed) }.first
     }
 }
 
@@ -1066,51 +1325,201 @@ extension DateFormatter {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         return formatter
     }()
+
+    static let giftCardISO8601Fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    static let giftCardTransactionDates: [DateFormatter] = [
+        "yyyy-MM-dd'T'HH:mm:ss.SSSSSSSXXXXX",
+        "yyyy-MM-dd'T'HH:mm:ss.SSSXXXXX",
+        "yyyy-MM-dd'T'HH:mm:ssXXXXX",
+        "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS",
+        "yyyy-MM-dd'T'HH:mm:ss.SSS",
+        "yyyy-MM-dd'T'HH:mm:ss",
+        "yyyy-MM-dd HH:mm:ss",
+        "MM/dd/yyyy HH:mm:ss",
+        "MM/dd/yyyy hh:mm:ss a",
+        "yyyy-MM-dd",
+        "MM/dd/yyyy",
+        "MM/dd/yy",
+        "MMM d, yyyy"
+    ].map { format in
+        let formatter = DateFormatter()
+        formatter.dateFormat = format
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter
+    }
 }
 
 final class VisionCardScanner: CardScanning {
-    func extractCandidates(from image: CGImage) async throws -> ScanCandidate {
-        try await withCheckedThrowingContinuation { continuation in
-            let request = VNRecognizeTextRequest { request, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                    return
+    private struct RecognizedLine {
+        var text: String
+        var boundingBox: CGRect
+        var confidence: Float
+    }
+
+    private struct RecognizedFields {
+        var cardNumber: String?
+        var expiry: String?
+        var labeledCVV: String?
+    }
+
+    func extractCandidates(from image: CGImage, mode: ScanRecognitionMode) async throws -> ScanCandidate {
+        let lines: [RecognizedLine] = try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let request = VNRecognizeTextRequest { request, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                    let lines = (request.results as? [VNRecognizedTextObservation] ?? []).compactMap { observation in
+                        observation.topCandidates(1).first.map {
+                            RecognizedLine(text: $0.string, boundingBox: observation.boundingBox, confidence: $0.confidence)
+                        }
+                    }
+                    continuation.resume(returning: lines)
                 }
-                let text = (request.results as? [VNRecognizedTextObservation] ?? [])
-                    .compactMap { $0.topCandidates(1).first?.string }
-                    .joined(separator: "\n")
-                continuation.resume(returning: self.extractCandidates(from: text))
-            }
-            request.recognitionLevel = .accurate
-            request.recognitionLanguages = ["en-US"]
-            let handler = VNImageRequestHandler(cgImage: image)
-            do {
-                try handler.perform([request])
-            } catch {
-                continuation.resume(throwing: error)
+                // Live and shutter capture intentionally share the same recognition
+                // algorithm. Live frames are throttled by CameraViewController instead.
+                request.recognitionLevel = .accurate
+                request.recognitionLanguages = ["en-US"]
+                request.usesLanguageCorrection = false
+                request.minimumTextHeight = 0.012
+                let handler = VNImageRequestHandler(cgImage: image)
+                do {
+                    try handler.perform([request])
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             }
         }
+        try Task.checkCancellation()
+        return extractCandidates(from: lines)
     }
 
     func extractCandidates(from text: String) -> ScanCandidate {
-        let card = text.firstMatch(#"(?:\d[\s-]?){16}"#).map { CardRules.digitsOnly($0) }
-        let labeledExpiry = text.firstMatch(#"(?i)(?:exp|expiry)[:\s]*((0[1-9]|1[0-2])\/([0-9]{2}))"#, group: 1)
-        let expiry = labeledExpiry ?? text.firstMatch(#"\b(0[1-9]|1[0-2])\/([0-9]{2})\b"#)
-        let labeledCVV = text.firstMatch(#"(?i)cvv[:\s]*([0-9]{3,4})"#, group: 1)
-        let cvv = labeledCVV ?? text.allMatches(#"\b\d{3,4}\b"#).last
+        let fields = recognizedFields(from: text)
+        let cvv = fields.labeledCVV ?? inferContextualCVV(
+            from: text,
+            excludingCard: fields.cardNumber,
+            expiry: fields.expiry
+        )
+        return makeCandidate(text: text, fields: fields, cvv: cvv)
+    }
+
+    private func extractCandidates(from lines: [RecognizedLine]) -> ScanCandidate {
+        let text = lines.map(\.text).joined(separator: "\n")
+        let fields = recognizedFields(from: text)
+        let cvv = fields.labeledCVV
+            ?? inferSpatialCVV(from: lines, excludingCard: fields.cardNumber, expiry: fields.expiry)
+            ?? inferContextualCVV(from: text, excludingCard: fields.cardNumber, expiry: fields.expiry)
+        return makeCandidate(text: text, fields: fields, cvv: cvv)
+    }
+
+    private func recognizedFields(from text: String) -> RecognizedFields {
+        let labeledCard = text
+            .firstMatch(#"(?i)(?:card(?:[ \t]*(?:number|no\.?))?|pan)[ \t]*[:#-]?[ \t]*((?:\d[ \t-]?){13,19})"#, group: 1)
+            .map(CardRules.digitsOnly)
+            .flatMap { CardRules.isValidCardNumber($0) ? $0 : nil }
+        let validCards = text.allMatches(#"(?<!\d)(?:\d[ \t-]?){13,19}(?!\d)"#)
+            .map(CardRules.digitsOnly)
+            .filter(CardRules.isValidCardNumber)
+        let card = labeledCard ?? validCards.first
+
+        let labeledExpiry = text.firstMatch(#"(?i)(?:exp|expiry|expires)\s*[:#-]?\s*((0[1-9]|1[0-2])\s*[/\-]\s*([0-9]{2}))"#, group: 1)
+        let rawExpiry = labeledExpiry ?? text.firstMatch(#"\b(0[1-9]|1[0-2])\s*[/\-]\s*([0-9]{2})\b"#)
+        let expiry = rawExpiry.map(CardRules.formatExpiryInput)
+        let rawCVV = text.firstMatch(
+            #"(?i)(?:c\s*v\s*v(?:\s*2)?|c\s*v\s*c(?:\s*2)?|c\s*s\s*c|c\s*i\s*d|c\s*v\s*n|sec(?:urity)?\s*(?:code|number|no\.?|id)|card\s*(?:(?:security|verification)\s*)?code|card\s*(?:security|verification)\s*(?:number|no\.?)|verification\s*(?:code|number)|signature\s*code|3\s*digit\s*code)\s*[:#-]?\s*((?:[0-9][\s-]*){3,4})\b"#,
+            group: 1
+        )
+        let labeledCVV = rawCVV
+            .map(CardRules.digitsOnly)
+            .flatMap { CardRules.validateCVV($0) ? $0 : nil }
+
+        return RecognizedFields(cardNumber: card, expiry: expiry, labeledCVV: labeledCVV)
+    }
+
+    private func makeCandidate(text: String, fields: RecognizedFields, cvv: String?) -> ScanCandidate {
+        let confidence: Double
+        if fields.cardNumber != nil, fields.expiry != nil, cvv != nil {
+            confidence = 0.95
+        } else if fields.cardNumber != nil, fields.expiry != nil {
+            confidence = 0.78
+        } else if fields.cardNumber != nil {
+            confidence = 0.62
+        } else {
+            confidence = 0.45
+        }
         return ScanCandidate(
-            cardNumber: card,
-            expiry: expiry,
+            cardNumber: fields.cardNumber,
+            expiry: fields.expiry,
             cvv: cvv,
             recognizedText: text,
-            network: CardRules.inferNetwork(card ?? ""),
-            confidence: card != nil && expiry != nil ? 0.8 : 0.45
+            network: CardRules.inferNetwork(fields.cardNumber ?? ""),
+            confidence: confidence
         )
+    }
+
+    private func inferContextualCVV(from text: String, excludingCard card: String?, expiry: String?) -> String? {
+        let expiryDigits = expiry.map(CardRules.digitsOnly)
+        let candidates = text
+            .components(separatedBy: .newlines)
+            .enumerated()
+            .compactMap { index, rawLine -> (value: String, score: Int)? in
+                let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                let digits = CardRules.digitsOnly(line)
+                guard (3...4).contains(digits.count), digits != expiryDigits, digits != card else { return nil }
+
+                let isNumericOnly = line.range(of: #"^[\s\d#:\-]*$"#, options: .regularExpression) != nil
+                let hasSecurityContext = line.range(
+                    of: #"(?i)(security|secure|verification|verify|signature|code|cvv|cvc|csc|cid|cvn|sec\b|3\s*digit)"#,
+                    options: .regularExpression
+                ) != nil
+                guard isNumericOnly || hasSecurityContext else { return nil }
+
+                var score = digits.count == 3 ? 8 : 3
+                if isNumericOnly { score += 4 }
+                if hasSecurityContext { score += 6 }
+                if index > 0 { score += 1 }
+                return (digits, score)
+            }
+        return candidates.max { $0.score < $1.score }?.value
+    }
+
+    private func inferSpatialCVV(from lines: [RecognizedLine], excludingCard card: String?, expiry: String?) -> String? {
+        let expiryDigits = expiry.map(CardRules.digitsOnly)
+        let candidates = lines.compactMap { line -> (value: String, score: Double)? in
+            let digits = CardRules.digitsOnly(line.text)
+            guard (3...4).contains(digits.count), digits != expiryDigits, digits != card else { return nil }
+
+            let isNumericOnly = line.text.range(of: #"^[\s\d#:\-]*$"#, options: .regularExpression) != nil
+            let hasSecurityContext = line.text.range(
+                of: #"(?i)(security|secure|verification|verify|signature|code|cvv|cvc|csc|cid|cvn|sec\b|3\s*digit)"#,
+                options: .regularExpression
+            ) != nil
+            let compactLength = line.text.filter { !$0.isWhitespace }.count
+            guard isNumericOnly || hasSecurityContext || (line.boundingBox.midX > 0.62 && compactLength <= 12) else {
+                return nil
+            }
+
+            var score = digits.count == 3 ? 10.0 : 3.0
+            if isNumericOnly { score += 5 }
+            if hasSecurityContext { score += 7 }
+            if line.boundingBox.midX > 0.62 { score += 3 }
+            if (0.2...0.85).contains(line.boundingBox.midY) { score += 1 }
+            score += Double(line.confidence) * 2
+            return (digits, score)
+        }
+        return candidates.max { $0.score < $1.score }?.value
     }
 }
 
 struct StaticCardScanner: CardScanning {
-    func extractCandidates(from image: CGImage) async throws -> ScanCandidate {
+    func extractCandidates(from image: CGImage, mode: ScanRecognitionMode) async throws -> ScanCandidate {
         extractCandidates(from: "4111 1111 1111 1111 exp: 09/29 cvv: 123")
     }
 
@@ -1150,12 +1559,13 @@ struct AppEnvironment {
     var settingsRepository: SettingsRepository
     var biometricService: BiometricAuthenticating
     var notificationService: NotificationScheduling
-    var balanceService: BalanceRefreshing
     var scanner: CardScanning
-    var backgroundRefresh: BackgroundRefreshRegistering
 
     static func live() throws -> AppEnvironment {
-        let container = try ModelContainerFactory.makePersistent()
+        live(container: try ModelContainerFactory.makePersistent())
+    }
+
+    static func live(container: ModelContainer) -> AppEnvironment {
         let context = ModelContext(container)
         let notificationService = NotificationService()
         let cardRepository = SwiftDataCardRepository(context: context, credentialStore: KeychainCredentialStore())
@@ -1164,9 +1574,7 @@ struct AppEnvironment {
             settingsRepository: UserDefaultsSettingsRepository(),
             biometricService: LocalAuthenticationService(),
             notificationService: notificationService,
-            balanceService: BalanceService(repository: cardRepository, notifications: notificationService),
-            scanner: VisionCardScanner(),
-            backgroundRefresh: BackgroundRefreshService()
+            scanner: VisionCardScanner()
         )
     }
 
@@ -1180,9 +1588,7 @@ struct AppEnvironment {
             settingsRepository: InMemorySettingsRepository(),
             biometricService: AlwaysAllowAuthenticationService(),
             notificationService: notificationService,
-            balanceService: BalanceService(repository: cardRepository, notifications: notificationService),
-            scanner: StaticCardScanner(),
-            backgroundRefresh: NoopBackgroundRefreshService()
+            scanner: StaticCardScanner()
         )
     }
 }
@@ -1204,6 +1610,7 @@ final class AppModel {
     var isLocked = false
     var isAuthenticating = false
     var alertMessage: String?
+    private var hasStarted = false
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -1215,10 +1622,11 @@ final class AppModel {
     }
 
     func start() async {
-        environment.backgroundRefresh.scheduleStaleCheck()
-        await environment.notificationService.requestAuthorization()
+        guard !hasStarted else { return }
+        hasStarted = true
         reloadCards()
         await unlockIfNeeded()
+        Task { await environment.notificationService.requestAuthorization() }
     }
 
     func reloadCards() {
@@ -1248,9 +1656,47 @@ final class AppModel {
         guard CardRules.isValidCardNumber(input.cardNumber) else { throw VaultError.validation("Enter a valid Visa or Mastercard number.") }
         guard CardRules.validateExpiry(input.expiry) else { throw VaultError.validation("Use MM/YY.") }
         guard CardRules.validateCVV(input.cvv) else { throw VaultError.validation("Enter a valid CVV.") }
-        let id = try environment.cardRepository.addCard(input)
+        var resolvedInput = input
+        let defaultSuggestion = CardRules.suggestedNickname(for: input.cardNumber)
+        let trimmedNickname = input.nickname?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedNickname?.isEmpty != false || trimmedNickname == defaultSuggestion {
+            let existingNames = Set(cards.compactMap(\.nickname))
+            resolvedInput.nickname = CardRules.suggestedNickname(for: input.cardNumber, avoiding: existingNames)
+        }
+        let id = try environment.cardRepository.addCard(resolvedInput)
         reloadCards()
         return id
+    }
+
+    var isShowingVault: Bool { routePath.isEmpty }
+
+    var isShowingAddFlow: Bool {
+        guard let first = routePath.first else { return false }
+        switch first {
+        case .add, .manualEntry, .scan: return true
+        default: return false
+        }
+    }
+
+    var isShowingSettings: Bool {
+        guard let first = routePath.first else { return false }
+        if case .settings = first { return true }
+        return false
+    }
+
+    func showVault() {
+        guard !isShowingVault else { return }
+        routePath.removeAll()
+    }
+
+    func showPreferredAddFlow() {
+        guard !isShowingAddFlow else { return }
+        routePath = [settings.addCardPreference == .scan ? .scan : .manualEntry(prefill: nil)]
+    }
+
+    func showSettings() {
+        guard !isShowingSettings else { return }
+        routePath = [.settings]
     }
 
     func deleteCard(id: String) throws {
@@ -1260,25 +1706,23 @@ final class AppModel {
     }
 
     func revealCardNumber(id: String) async throws -> String {
+        try await revealCardCredentials(id: id).cardNumber
+    }
+
+    func revealCardCredentials(id: String) async throws -> CardCredentials {
         isAuthenticating = true
         defer { isAuthenticating = false }
         guard await environment.biometricService.authenticate(reason: "Reveal sensitive card details") else {
             throw VaultError.validation("Authentication was cancelled.")
         }
-        return try environment.cardRepository.getCredentials(cardID: id).cardNumber
-    }
-
-    func credentialsForAutofill(id: String) async throws -> CardCredentials {
-        guard await environment.biometricService.authenticate(reason: "Autofill card details") else {
-            throw VaultError.validation("Authentication was cancelled.")
-        }
         return try environment.cardRepository.getCredentials(cardID: id)
     }
 
-    func refreshCard(id: String) async -> RefreshOutcome {
-        let outcome = await environment.balanceService.refreshCard(id, ignoreCooldown: false, preferences: settings.notificationPreferences)
-        reloadCards()
-        return outcome
+    func credentialsForAutofill(id: String) async throws -> CardCredentials {
+        // Opening the embedded balance check is already an explicit user action from
+        // inside the unlocked vault. Avoid interrupting that workflow with a second
+        // authentication prompt; reveal remains separately authenticated.
+        return try environment.cardRepository.getCredentials(cardID: id)
     }
 
     func applyForegroundRefresh(id: String, result: BalanceResult) {
@@ -1294,8 +1738,8 @@ final class AppModel {
         environment.scanner.extractCandidates(from: text)
     }
 
-    func scanImage(_ image: CGImage) async throws -> ScanCandidate {
-        try await environment.scanner.extractCandidates(from: image)
+    func scanImage(_ image: CGImage, mode: ScanRecognitionMode) async throws -> ScanCandidate {
+        try await environment.scanner.extractCandidates(from: image, mode: mode)
     }
 
     func lockForBackground() {
@@ -1309,6 +1753,7 @@ final class AppModel {
             isLocked = false
             return
         }
+        guard !isAuthenticating else { return }
         isLocked = true
         isAuthenticating = true
         let authenticated = await environment.biometricService.authenticate(reason: "Unlock your card vault")
@@ -1332,10 +1777,6 @@ enum Route: Hashable {
 
 @main
 struct VaultCardApp: App {
-    init() {
-        BackgroundRefreshService().register()
-    }
-
     var body: some Scene {
         WindowGroup {
             BootstrapView()
@@ -1346,30 +1787,60 @@ struct VaultCardApp: App {
 struct BootstrapView: View {
     @State private var model: AppModel?
     @State private var startupError: String?
-
-    init() {
-        do {
-            let environment = try ProcessInfo.processInfo.arguments.contains("--ui-testing")
-                ? AppEnvironment.uiTesting()
-                : AppEnvironment.live()
-            _model = State(initialValue: AppModel(environment: environment))
-            _startupError = State(initialValue: nil)
-        } catch {
-            _model = State(initialValue: nil)
-            _startupError = State(initialValue: error.localizedDescription)
-        }
-    }
+    @State private var isTakingLong = false
 
     var body: some View {
         if let model {
             RootView()
                 .environment(model)
-        } else {
+        } else if let startupError {
             ContentUnavailableView(
                 "VaultCard could not start",
                 systemImage: "exclamationmark.triangle",
-                description: Text(startupError ?? "The local secure store could not be initialized.")
+                description: Text(startupError)
             )
+        } else {
+            ZStack {
+                VaultBackground()
+                VStack(spacing: 16) {
+                    VaultBrandMark(size: 76)
+                    ProgressView(isTakingLong ? "Still opening your encrypted vault…" : "Opening your vault…")
+                        .font(.callout.weight(.medium))
+                    if isTakingLong {
+                        Text("Your saved cards are safe. VaultCard is waiting for the on-device store to become available.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 36)
+                    }
+                }
+            }
+            .task { await bootstrap() }
+            .task {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled, model == nil, startupError == nil else { return }
+                isTakingLong = true
+            }
+        }
+    }
+
+    @MainActor
+    private func bootstrap() async {
+        guard model == nil, startupError == nil else { return }
+        let isUITesting = ProcessInfo.processInfo.arguments.contains("--ui-testing")
+        do {
+            let environment: AppEnvironment
+            if isUITesting {
+                environment = try AppEnvironment.uiTesting()
+            } else {
+                let result = await Task.detached(priority: .userInitiated) {
+                    Result { try ModelContainerFactory.makePersistent() }
+                }.value
+                environment = AppEnvironment.live(container: try result.get())
+            }
+            model = AppModel(environment: environment)
+        } catch {
+            startupError = error.localizedDescription
         }
     }
 }
@@ -1381,6 +1852,7 @@ struct RootView: View {
     var body: some View {
         @Bindable var model = model
         ZStack {
+            VaultBackground()
             if model.settings.onboardingCompleted {
                 NavigationStack(path: $model.routePath) {
                     CardListView()
@@ -1395,6 +1867,16 @@ struct RootView: View {
                             }
                         }
                 }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VaultFloatingBar(
+                        vaultSelected: model.isShowingVault,
+                        addSelected: model.isShowingAddFlow,
+                        settingsSelected: model.isShowingSettings,
+                        showVault: { withAnimation(.snappy) { model.showVault() } },
+                        addCard: { withAnimation(.snappy) { model.showPreferredAddFlow() } },
+                        showSettings: { withAnimation(.snappy) { model.showSettings() } }
+                    )
+                }
             } else {
                 OnboardingView()
             }
@@ -1402,6 +1884,7 @@ struct RootView: View {
                 LockOverlayView()
             }
         }
+        .tint(VaultTheme.electricBlue)
         .task { await model.start() }
         .alert("VaultCard", isPresented: Binding(get: { model.alertMessage != nil }, set: { if !$0 { model.alertMessage = nil } })) {
             Button("OK", role: .cancel) { model.alertMessage = nil }
@@ -1422,86 +1905,372 @@ struct OnboardingView: View {
     @Environment(AppModel.self) private var model
     @State private var index = 0
     private let pages = [
-        ("Track every gift card in one place", "VaultCard keeps prepaid Visa and Mastercard gift cards organized on-device only.", "lock.rectangle.stack"),
-        ("Balances stay easy to check", "Refresh balances and recent transactions without juggling receipts.", "arrow.clockwise.circle"),
-        ("Sensitive details stay protected", "Card credentials remain encrypted on-device and require authentication before reveal.", "faceid")
+        ("Your prepaid cards.\nOrganized. Protected.", "VaultCard securely stores your Visa and Mastercard open-loop gift cards — on this device and under your control.", "creditcard.and.123"),
+        ("Balances stay\nwithin reach.", "Refresh balances and recent activity without juggling receipts, websites, or physical cards.", "arrow.triangle.2.circlepath"),
+        ("Private by design.\nReady when you are.", "Sensitive details stay encrypted and require authentication before they are revealed or autofilled.", "faceid")
     ]
 
     var body: some View {
-        VStack {
-            TabView(selection: $index) {
-                ForEach(Array(pages.enumerated()), id: \.offset) { offset, page in
-                    VStack(spacing: 20) {
-                        Image(systemName: page.2).font(.system(size: 76)).foregroundStyle(.tint)
-                        Text(page.0).font(.largeTitle.bold()).multilineTextAlignment(.center)
-                        Text(page.1).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        ZStack {
+            VaultBackground()
+            VStack(spacing: 0) {
+                TabView(selection: $index) {
+                    ForEach(Array(pages.enumerated()), id: \.offset) { offset, page in
+                        VStack(spacing: 24) {
+                            Spacer(minLength: 28)
+                            ZStack {
+                                Circle()
+                                    .fill(VaultTheme.electricBlue.opacity(0.12))
+                                    .frame(width: 210, height: 210)
+                                    .blur(radius: 2)
+                                if offset == 0 {
+                                    VaultBrandMark(size: 124)
+                                    Image(systemName: "creditcard.fill")
+                                        .font(.system(size: 50))
+                                        .foregroundStyle(.white, VaultTheme.electricBlue)
+                                        .rotationEffect(.degrees(-9))
+                                        .offset(x: 58, y: 42)
+                                        .shadow(color: VaultTheme.electricBlue.opacity(0.5), radius: 12)
+                                } else {
+                                    VaultBrandMark(size: 116)
+                                    Image(systemName: page.2)
+                                        .font(.system(size: 42, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                }
+                            }
+                            Text(page.0)
+                                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                                .multilineTextAlignment(.center)
+                                .tracking(-0.6)
+                            Text(page.1)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .lineSpacing(4)
+                                .frame(maxWidth: 340)
+                            Spacer(minLength: 20)
+                        }
+                        .padding(.horizontal, 28)
+                        .tag(offset)
                     }
-                    .padding(28)
-                    .tag(offset)
                 }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .always))
-            Button(index == pages.count - 1 ? "Get Started" : "Next") {
-                if index == pages.count - 1 {
-                    model.completeOnboarding()
-                } else {
-                    withAnimation { index += 1 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+
+                HStack(spacing: 7) {
+                    ForEach(pages.indices, id: \.self) { page in
+                        Capsule()
+                            .fill(page == index ? VaultTheme.electricBlue : Color.secondary.opacity(0.2))
+                            .frame(width: page == index ? 24 : 7, height: 7)
+                            .animation(.snappy, value: index)
+                    }
                 }
+                .padding(.bottom, 18)
+
+                Button(index == pages.count - 1 ? "Get Started" : "Next") {
+                    if index == pages.count - 1 {
+                        model.completeOnboarding()
+                    } else {
+                        withAnimation(.snappy) { index += 1 }
+                    }
+                }
+                .accessibilityIdentifier("onboarding.primary")
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .controlSize(.large)
+                .vaultPrimaryButton()
+                .padding(.horizontal, 28)
+
+                Label("Your data stays on your device.", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 18)
             }
-            .accessibilityIdentifier("onboarding.primary")
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding()
         }
     }
 }
 
 struct CardListView: View {
+    private enum CardFilter: String, CaseIterable {
+        case all = "All"
+        case upToDate = "Up to Date"
+        case needsRefresh = "Needs Refresh"
+    }
+
     @Environment(AppModel.self) private var model
+    @State private var searchText = ""
+    @State private var selectedFilter = CardFilter.all
+    @State private var isStackExpanded = false
+    @State private var pendingDelete: VaultCard?
+    @FocusState private var searchIsFocused: Bool
+
+    private var visibleCards: [VaultCard] {
+        let filtered: [VaultCard]
+        switch selectedFilter {
+        case .all:
+            filtered = model.sortedCards
+        case .upToDate:
+            filtered = model.sortedCards.filter { $0.balanceFreshness() == .upToDate }
+        case .needsRefresh:
+            filtered = model.sortedCards.filter { $0.balanceFreshness() == .needsRefresh }
+        }
+        guard !searchText.isEmpty else { return filtered }
+        return filtered.filter {
+            $0.displayName.localizedCaseInsensitiveContains(searchText)
+                || $0.last4.contains(searchText)
+                || $0.network.displayName.localizedCaseInsensitiveContains(searchText)
+        }
+    }
 
     var body: some View {
-        List {
-            if model.sortedCards.isEmpty {
-                ContentUnavailableView("No cards yet", systemImage: "creditcard", description: Text("Add your first prepaid gift card to start tracking balances and expiry dates."))
-                Button("Add Your First Card") { model.routePath.append(.add) }
-                    .accessibilityIdentifier("cards.empty.add")
-            } else {
-                Section {
-                    ForEach(model.sortedCards) { card in
-                        Button { model.routePath.append(.detail(card.id)) } label: {
-                            CardRow(card: card)
+        ZStack {
+            VaultBackground()
+            List {
+                searchRow
+                filterRow
+
+                if visibleCards.isEmpty {
+                    emptyState
+                } else {
+                    cardCollection
+                    recentCardRows
+                }
+
+                Label("Card data and sensitive details stay on this device.", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .cardListRowStyle(verticalPadding: 14)
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 1)
+            .navigationTitle("Vault")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        ForEach(CardSortOption.allCases) { option in
+                            Button(option.label) { model.setSort(option) }
                         }
-                        .accessibilityIdentifier("card.row.\(card.last4)")
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
                     }
-                } header: {
-                    Text("Your Cards")
                 }
             }
         }
-        .refreshable {
-            for card in model.sortedCards {
-                _ = await model.refreshCard(id: card.id)
-            }
-        }
-        .navigationTitle("VaultCard")
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Menu {
-                    ForEach(CardSortOption.allCases) { option in
-                        Button(option.label) { model.setSort(option) }
-                    }
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
+        .alert("Remove card?", isPresented: Binding(
+            get: { pendingDelete != nil },
+            set: { if !$0 { pendingDelete = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+            Button("Delete", role: .destructive) {
+                guard let card = pendingDelete else { return }
+                pendingDelete = nil
+                do {
+                    try model.deleteCard(id: card.id)
+                } catch {
+                    model.alertMessage = error.localizedDescription
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { model.routePath.append(.settings) } label: { Image(systemName: "gearshape") }
-            }
-            ToolbarItem(placement: .bottomBar) {
-                Button { model.routePath.append(.add) } label: { Label("Add Card", systemImage: "plus") }
-                    .accessibilityIdentifier("cards.add")
+        } message: {
+            Text("This removes the card and its secure credentials from this device.")
+        }
+    }
+
+    private var searchRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search cards", text: $searchText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($searchIsFocused)
+                .submitLabel(.search)
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Clear search")
             }
         }
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .contentShape(Rectangle())
+        .onTapGesture { searchIsFocused = true }
+        .vaultGlass(cornerRadius: 16)
+        .cardListRowStyle(verticalPadding: 6)
+    }
+
+    private var filterRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                filterButton(.all, count: model.cards.count)
+                filterButton(.upToDate, count: model.cards.filter { $0.balanceFreshness() == .upToDate }.count)
+                filterButton(.needsRefresh, count: model.cards.filter { $0.balanceFreshness() == .needsRefresh }.count)
+            }
+        }
+        .cardListRowStyle(verticalPadding: 2)
+    }
+
+    private var emptyState: some View {
+        VaultSurface {
+            VStack(spacing: 16) {
+                VaultBrandMark(size: 82)
+                Text(model.cards.isEmpty ? "No cards yet" : "No matching cards")
+                    .font(.title2.bold())
+                Text(model.cards.isEmpty ? "Add your first Visa or Mastercard prepaid card to start tracking balances and expiry dates." : "Try another filter, card name, network, or last four digits.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                if model.cards.isEmpty {
+                    Button("Add Your First Card") { model.showPreferredAddFlow() }
+                        .accessibilityIdentifier("cards.empty.add")
+                        .vaultPrimaryButton()
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
+        }
+        .cardListRowStyle()
+    }
+
+    @ViewBuilder
+    private var cardCollection: some View {
+        if visibleCards.count > 1, isStackExpanded {
+            HStack {
+                Text("Cards")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Collapse") {
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
+                        isStackExpanded = false
+                    }
+                }
+                .font(.caption.weight(.semibold))
+            }
+            .cardListRowStyle(verticalPadding: 2)
+        }
+
+        if visibleCards.count == 1, let card = visibleCards.first {
+            Button { model.routePath.append(.detail(card.id)) } label: {
+                VaultCardArtwork(card: card)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("card.row.\(card.last4)")
+            .accessibilityLabel("Open \(card.displayName)")
+            .cardListRowStyle()
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                deleteAction(for: card)
+            }
+        } else if isStackExpanded {
+            ForEach(visibleCards) { card in
+                Button { model.routePath.append(.detail(card.id)) } label: {
+                    VaultCardArtwork(card: card)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("card.row.\(card.last4)")
+                .cardListRowStyle()
+                // A full trailing swipe reaches the same confirmation surface as the
+                // visible action, so it never removes credentials without consent.
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    deleteAction(for: card)
+                }
+            }
+        } else {
+            Button {
+                withAnimation(.spring(response: 0.46, dampingFraction: 0.82)) {
+                    isStackExpanded = true
+                }
+            } label: {
+                VStack(spacing: 4) {
+                    HStack(spacing: 10) {
+                        Label("View all \(visibleCards.count) cards", systemImage: "rectangle.stack.fill")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.bold))
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 44)
+                    .vaultGlass(cornerRadius: 18, interactive: true)
+                    VaultCardStackView(cards: visibleCards)
+                }
+            }
+            .accessibilityIdentifier("cards.stack.expand")
+            .accessibilityLabel("View all \(visibleCards.count) cards")
+            .buttonStyle(.plain)
+            .cardListRowStyle(verticalPadding: 2)
+        }
+    }
+
+    @ViewBuilder
+    private var recentCardRows: some View {
+        Text("Recently Updated")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .cardListRowStyle(verticalPadding: 4)
+
+        ForEach(visibleCards) { card in
+            Button { model.routePath.append(.detail(card.id)) } label: {
+                VaultSurface(padding: 8) {
+                    CardRow(card: card)
+                }
+            }
+            .buttonStyle(.plain)
+            .cardListRowStyle(verticalPadding: 4)
+            // Keep the full-swipe behavior consistent with the larger card artwork.
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                deleteAction(for: card)
+            }
+        }
+    }
+
+    private func filterButton(_ filter: CardFilter, count: Int) -> some View {
+        Button {
+            withAnimation(.snappy) { selectedFilter = filter }
+        } label: {
+            VaultStatusPill(title: "\(filter.rawValue) \(count)", active: selectedFilter == filter)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("cards.filter.\(filter.rawValue.lowercased().replacingOccurrences(of: " ", with: "-"))")
+        .accessibilityValue(selectedFilter == filter ? "Selected" : "Not selected")
+        .disabled(selectedFilter == filter)
+    }
+
+    private func deleteAction(for card: VaultCard) -> some View {
+        Button(role: .destructive) {
+            pendingDelete = card
+        } label: {
+            Label("Delete", systemImage: "trash")
+        }
+        .tint(.red)
+    }
+}
+
+struct VaultCardStackView: View {
+    let cards: [VaultCard]
+
+    var body: some View {
+        let stackedCards = Array(cards.prefix(4))
+        ZStack(alignment: .top) {
+            ForEach(Array(stackedCards.enumerated()).reversed(), id: \.element.id) { index, card in
+                VaultCardArtwork(card: card, emphasizesEdge: index > 0)
+                    .scaleEffect(1 - CGFloat(index) * 0.032, anchor: .top)
+                    .offset(y: CGFloat(index) * 28)
+                    .zIndex(Double(stackedCards.count - index))
+                    .accessibilityHidden(index != 0)
+            }
+        }
+        .frame(height: 176 + CGFloat(max(0, stackedCards.count - 1)) * 28)
+    }
+}
+
+private extension View {
+    func cardListRowStyle(verticalPadding: CGFloat = 6) -> some View {
+        listRowInsets(EdgeInsets(top: verticalPadding, leading: 20, bottom: verticalPadding, trailing: 20))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
     }
 }
 
@@ -1509,16 +2278,25 @@ struct CardRow: View {
     var card: VaultCard
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(card.displayName).font(.headline)
-                Spacer()
-                Text(card.network.displayName).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+        HStack(spacing: 12) {
+            VaultRowIcon(symbol: "creditcard.fill")
+            VStack(alignment: .leading, spacing: 3) {
+                Text(card.displayName).font(.subheadline.weight(.semibold))
+                Text("•••• \(card.last4)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
             }
-            Text(card.balance.map { $0.formatted(.currency(code: "USD")) } ?? "Balance unavailable")
-                .foregroundStyle(.primary)
-            Text("Expires \(card.expiry)").foregroundStyle(.secondary)
+            Spacer()
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(card.balance.map { $0.formatted(.currency(code: "USD")) } ?? "—")
+                    .font(.subheadline.weight(.semibold))
+                Text(card.lastFetchedAt?.formatted(date: .omitted, time: .shortened) ?? "Never")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 10)
         .contentShape(Rectangle())
     }
 }
@@ -1527,196 +2305,747 @@ struct AddCardChoiceView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        List {
-            Section {
-                Button { model.routePath.append(.scan) } label: {
-                    Label("Scan Card", systemImage: "doc.viewfinder")
+        ZStack {
+            VaultBackground()
+            ScrollView {
+                VStack(spacing: 20) {
+                    VaultBrandMark(size: 78)
+                    VStack(spacing: 8) {
+                        Text("Add Card")
+                            .font(.system(.title, design: .rounded, weight: .bold))
+                        Text("Add a Visa or Mastercard prepaid or debit gift card.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    VaultSurface(padding: 8) {
+                        VStack(spacing: 0) {
+                            Button { model.routePath.append(.scan) } label: {
+                                HStack(spacing: 14) {
+                                    VaultRowIcon(symbol: "viewfinder", color: VaultTheme.electricBlue)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("Scan Card").font(.headline)
+                                        Text("Use the camera to scan card details")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                                }
+                                .padding(10)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("add.scan")
+                            Divider().padding(.leading, 58)
+                            Button { model.routePath.append(.manualEntry(prefill: nil)) } label: {
+                                HStack(spacing: 14) {
+                                    VaultRowIcon(symbol: "keyboard", color: VaultTheme.electricBlue)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("Enter Manually").font(.headline)
+                                        Text("Type card details and save")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                                }
+                                .padding(10)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("add.manual")
+                        }
+                    }
+
+                    Label("Your card data stays on your device.", systemImage: "lock.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .accessibilityIdentifier("add.scan")
-                Button { model.routePath.append(.manualEntry(prefill: nil)) } label: {
-                    Label("Enter Manually", systemImage: "keyboard")
-                }
-                .accessibilityIdentifier("add.manual")
-            } header: {
-                Text("Choose how to add your card")
-            } footer: {
-                Text("Scan can prefill fields, but manual review is required before saving.")
+                .padding(.horizontal, 20)
+                .padding(.top, 32)
             }
         }
         .navigationTitle("Add Card")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
 struct ManualCardEntryView: View {
     @Environment(AppModel.self) private var model
+    private let scanCapture: ScanCandidate?
     @State private var cardNumber: String
     @State private var expiry: String
     @State private var cvv: String
-    @State private var nickname = ""
+    @State private var nickname: String
     @State private var errorMessage: String?
 
     init(prefill: ScanCandidate?) {
+        scanCapture = prefill
         _cardNumber = State(initialValue: prefill?.cardNumber ?? "")
         _expiry = State(initialValue: CardRules.formatExpiryInput(prefill?.expiry ?? ""))
         _cvv = State(initialValue: prefill?.cvv ?? "")
+        _nickname = State(initialValue: prefill?.cardNumber.map(CardRules.suggestedNickname) ?? "")
+    }
+
+    private var previewCard: VaultCard {
+        let digits = CardRules.digitsOnly(cardNumber)
+        return VaultCard(
+            id: "preview",
+            nickname: nickname.isEmpty ? "Your Card" : nickname,
+            network: CardRules.inferNetwork(cardNumber),
+            last4: digits.count >= 4 ? String(digits.suffix(4)) : "••••",
+            expiry: expiry.isEmpty ? "MM/YY" : expiry,
+            balance: nil,
+            transactions: [],
+            lastFetchedAt: nil,
+            fetchFailureCount: 0,
+            addedAt: Date(),
+            refreshBlockedUntil: nil,
+            credentialVersion: 1
+        )
     }
 
     var body: some View {
-        Form {
-            Section {
-                TextField("Card Number", text: $cardNumber)
+        ZStack {
+            VaultBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text(scanCapture == nil ? "Enter your card details." : "Confirm the captured details against your physical card.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    VaultCardArtwork(card: previewCard)
+
+                    if scanCapture != nil {
+                        Label("Captured from scan. Review or edit every value before saving.", systemImage: "checkmark.seal.fill")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(VaultTheme.success)
+                            .accessibilityIdentifier("scan.confirmation.summary")
+                    }
+                    manualFields
+
+                    if let errorMessage {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                            Text(errorMessage)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.78)
+                        }
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(VaultTheme.danger)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(VaultTheme.danger.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+                            .accessibilityIdentifier("manual.validationError")
+                    }
+
+                    Button(scanCapture == nil ? "Save Card" : "Confirm & Save") {
+                        do {
+                            let id = try model.addCard(CardInput(cardNumber: cardNumber, expiry: expiry, cvv: cvv, nickname: nickname))
+                            model.routePath = [.detail(id)]
+                        } catch {
+                            errorMessage = error.localizedDescription
+                        }
+                    }
+                    .accessibilityIdentifier("manual.save")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .controlSize(.large)
+                    .vaultPrimaryButton()
+
+                    if scanCapture != nil {
+                        Button {
+                            if !model.routePath.isEmpty { model.routePath.removeLast() }
+                        } label: {
+                            Label("Re-scan Card", systemImage: "viewfinder")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .accessibilityIdentifier("scan.confirmation.rescan")
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                    }
+
+                    Label("Your card stays on this device and remains under your control.", systemImage: "lock.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+                .padding(20)
+            }
+        }
+        .navigationTitle("Review & Save")
+        .navigationBarTitleDisplayMode(.inline)
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    private var manualFields: some View {
+        VaultSurface(padding: 4) {
+            VStack(spacing: 0) {
+                fieldLabel("Card number")
+                TextField("4000 1234 5678 9010", text: Binding(
+                    get: { CardRules.formatCardNumber(cardNumber) },
+                    set: { cardNumber = String(CardRules.digitsOnly($0).prefix(16)) }
+                ))
                     .keyboardType(.numberPad)
+                    .textContentType(.creditCardNumber)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 12)
                     .accessibilityIdentifier("manual.cardNumber")
-                Text(CardRules.inferNetwork(cardNumber).displayName).foregroundStyle(.secondary)
-                TextField("Expiry (MM/YY)", text: Binding(get: { expiry }, set: { expiry = CardRules.formatExpiryInput($0) }))
-                    .keyboardType(.numbersAndPunctuation)
-                    .accessibilityIdentifier("manual.expiry")
-                SecureField("CVV", text: $cvv)
-                    .keyboardType(.numberPad)
-                    .accessibilityIdentifier("manual.cvv")
-                TextField("Nickname (optional)", text: $nickname)
+                Divider().padding(.leading, 14)
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        fieldLabel("Expiration")
+                        TextField("MM/YY", text: Binding(get: { expiry }, set: { expiry = CardRules.formatExpiryInput($0) }))
+                            .keyboardType(.numbersAndPunctuation)
+                            .accessibilityIdentifier("manual.expiry")
+                    }
+                    Divider().frame(height: 54)
+                    VStack(alignment: .leading, spacing: 4) {
+                        fieldLabel("CVV")
+                        cvvInput
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 12)
+                Divider().padding(.leading, 14)
+                fieldLabel("Card nickname")
+                TextField("Blue Prisma", text: $nickname)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 12)
                     .accessibilityIdentifier("manual.nickname")
             }
-            if let errorMessage {
-                Text(errorMessage).foregroundStyle(.red)
-            }
-            Button("Save Card") {
-                do {
-                    let id = try model.addCard(CardInput(cardNumber: cardNumber, expiry: expiry, cvv: cvv, nickname: nickname))
-                    model.routePath = [.detail(id)]
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
-            }
-            .accessibilityIdentifier("manual.save")
         }
-        .navigationTitle("Card Details")
     }
+
+    @ViewBuilder
+    private var cvvInput: some View {
+        if scanCapture == nil {
+            SecureField("123", text: $cvv)
+                .keyboardType(.numberPad)
+                .accessibilityIdentifier("manual.cvv")
+        } else {
+            TextField("123", text: Binding(
+                get: { cvv },
+                set: { cvv = String(CardRules.digitsOnly($0).prefix(4)) }
+            ))
+            .keyboardType(.numberPad)
+            .accessibilityIdentifier("manual.cvv")
+        }
+    }
+
+    private func fieldLabel(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+    }
+
 }
 
 struct ScanCardView: View {
+    private enum FocusField: Hashable {
+        case cardNumber
+        case expiry
+        case cvv
+    }
+
     @Environment(AppModel.self) private var model
-    @State private var fallbackText = ""
-    @State private var lastCandidate: ScanCandidate?
-    @State private var showFallback = false
+    @State private var cardNumber = ""
+    @State private var expiry = ""
+    @State private var cvv = ""
+    @State private var hasCandidate = false
+    @State private var isProcessingFrame = false
+    @State private var didAdvance = false
+    @State private var editorRevision = 0
+    @State private var recognitionTask: Task<Void, Never>?
+    @State private var isScannerVisible = false
+    @FocusState private var focusedField: FocusField?
 
     var body: some View {
-        List {
-            Section {
-                CameraCaptureView { image in
-                    Task {
-                        do {
-                            let candidate = try await model.scanImage(image)
-                            handle(candidate)
-                        } catch {
-                            showFallback = true
-                            model.alertMessage = "Scan failed. Use text fallback or enter manually."
+        ZStack {
+            VaultBackground()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 18) {
+                        VStack(spacing: 5) {
+                            Text("Position your card inside the frame.")
+                                .font(.headline)
+                            Text("VaultCard scans automatically. Use the camera button only if you want to capture a still image.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+
+                        if !didAdvance {
+                            CameraCaptureView(
+                                liveDetectionEnabled: isScannerVisible && !isProcessingFrame,
+                                onImage: { image in processImage(image, manualCapture: true) },
+                                onLiveFrame: { image in processImage(image, manualCapture: false) }
+                            )
+                            .frame(height: 330)
+                            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                                    .stroke(VaultTheme.electricBlue.opacity(0.75), lineWidth: 2)
+                            }
+                            .shadow(color: VaultTheme.electricBlue.opacity(0.2), radius: 20)
+                            .overlay(alignment: .top) {
+                                if isProcessingFrame {
+                                    Label("Reading card…", systemImage: "text.viewfinder")
+                                        .font(.caption.weight(.semibold))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .background(.ultraThinMaterial, in: Capsule())
+                                        .padding(12)
+                                }
+                            }
+                        }
+
+                        Button {
+                            model.routePath.append(.manualEntry(prefill: nil))
+                        } label: {
+                            Label("Enter card manually", systemImage: "keyboard")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("scan.enterManually")
+
+                        if hasCandidate {
+                            detectedDetailsEditor
+                                .id("scan.detectedDetails")
                         }
                     }
+                    .padding(20)
                 }
-                .frame(minHeight: 260)
-            } header: {
-                Text("Scan with your camera")
-            } footer: {
-                Text("Recognition runs on device. Review the prefilled form before saving.")
-            }
-            if let lastCandidate {
-                Section("Last scan") {
-                    Text("Card: \(lastCandidate.cardNumber ?? "Not found")")
-                    Text("Expiry: \(lastCandidate.expiry ?? "Not found")")
-                    Text("CVV: \(lastCandidate.cvv ?? "Not found")")
-                    Text("Confidence: \((lastCandidate.confidence * 100).rounded().formatted())%")
-                }
-            }
-            Section("Fallback OCR text") {
-                Toggle("Use text fallback", isOn: $showFallback)
-                if showFallback {
-                    TextEditor(text: $fallbackText).frame(minHeight: 140)
-                    Button("Use Text Result") {
-                        handle(model.scanText(fallbackText))
+                .onChange(of: editorRevision) { _, _ in
+                    withAnimation(.snappy) {
+                        proxy.scrollTo("scan.detectedDetails", anchor: .center)
                     }
-                    .accessibilityIdentifier("scan.useText")
                 }
             }
         }
         .navigationTitle("Scan Card")
+        .navigationBarTitleDisplayMode(.inline)
+        .scrollDismissesKeyboard(.interactively)
+        .onAppear {
+            isScannerVisible = true
+            if didAdvance { resetForRescan() }
+        }
+        .onDisappear {
+            isScannerVisible = false
+            recognitionTask?.cancel()
+            recognitionTask = nil
+            isProcessingFrame = false
+        }
     }
 
-    private func handle(_ candidate: ScanCandidate) {
-        lastCandidate = candidate
-        fallbackText = candidate.recognizedText
-        showFallback = true
-        if candidate.hasCandidateData {
-            model.routePath.append(.manualEntry(prefill: candidate))
+    private var detectedDetailsEditor: some View {
+        let complete = candidateIsComplete(currentCandidate)
+        return VaultSurface(padding: 4) {
+            VStack(alignment: .leading, spacing: 0) {
+                Label(
+                    complete ? "Ready to confirm" : "Review and complete the details",
+                    systemImage: complete ? "checkmark.seal.fill" : "pencil.and.list.clipboard"
+                )
+                .font(.headline)
+                .foregroundStyle(complete ? VaultTheme.success : VaultTheme.warning)
+                .padding(14)
+
+                Divider().padding(.leading, 14)
+                fieldLabel("Full card number")
+                TextField("4000 1234 5678 9010", text: Binding(
+                    get: { CardRules.formatCardNumber(cardNumber) },
+                    set: { cardNumber = String(CardRules.digitsOnly($0).prefix(16)) }
+                ))
+                .keyboardType(.numberPad)
+                .textContentType(.creditCardNumber)
+                .font(.body.monospaced())
+                .padding(.horizontal, 14)
+                .padding(.bottom, 12)
+                .focused($focusedField, equals: .cardNumber)
+                .accessibilityIdentifier("scan.cardNumber")
+
+                Divider().padding(.leading, 14)
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        fieldLabel("Expiration")
+                        TextField("MM/YY", text: Binding(
+                            get: { expiry },
+                            set: { expiry = CardRules.formatExpiryInput($0) }
+                        ))
+                        .keyboardType(.numbersAndPunctuation)
+                        .focused($focusedField, equals: .expiry)
+                        .accessibilityIdentifier("scan.expiry")
+                    }
+                    Divider().frame(height: 54)
+                    VStack(alignment: .leading, spacing: 4) {
+                        fieldLabel("CVV")
+                        TextField("123", text: Binding(
+                            get: { cvv },
+                            set: { cvv = String(CardRules.digitsOnly($0).prefix(4)) }
+                        ))
+                        .keyboardType(.numberPad)
+                        .focused($focusedField, equals: .cvv)
+                        .accessibilityIdentifier("scan.cvv")
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 12)
+
+                if !complete {
+                    Text("Correct any missing or incorrect value above, then confirm. All values remain visible until you save.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 12)
+                }
+
+                Divider().padding(.leading, 14)
+                HStack(spacing: 10) {
+                    Button {
+                        advance(to: currentCandidate)
+                    } label: {
+                        Label("Confirm", systemImage: "checkmark")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .accessibilityIdentifier("scan.confirm")
+                    .vaultPrimaryButton()
+                    .disabled(!complete)
+
+                    Button {
+                        resetForRescan()
+                    } label: {
+                        Label("Re-scan", systemImage: "viewfinder")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .accessibilityIdentifier("scan.rescan")
+                    .buttonStyle(.bordered)
+                }
+                .padding(14)
+            }
         }
+    }
+
+    private var currentCandidate: ScanCandidate {
+        let normalizedCard = CardRules.digitsOnly(cardNumber)
+        let normalizedExpiry = CardRules.formatExpiryInput(expiry)
+        let normalizedCVV = CardRules.digitsOnly(cvv)
+        return ScanCandidate(
+            cardNumber: normalizedCard.isEmpty ? nil : normalizedCard,
+            expiry: normalizedExpiry.isEmpty ? nil : normalizedExpiry,
+            cvv: normalizedCVV.isEmpty ? nil : normalizedCVV,
+            recognizedText: "",
+            network: CardRules.inferNetwork(normalizedCard),
+            confidence: candidateIsCompleteValues(card: normalizedCard, expiry: normalizedExpiry, cvv: normalizedCVV) ? 0.95 : 0.65
+        )
+    }
+
+    private func fieldLabel(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+    }
+
+    private func processImage(_ image: CGImage, manualCapture: Bool) {
+        guard isScannerVisible, !isProcessingFrame, !didAdvance else { return }
+        isProcessingFrame = true
+        recognitionTask?.cancel()
+        recognitionTask = Task {
+            defer {
+                isProcessingFrame = false
+                recognitionTask = nil
+            }
+            do {
+                let candidate = try await model.scanImage(image, mode: manualCapture ? .still : .live)
+                guard !Task.isCancelled else { return }
+                if candidate.hasCandidateData {
+                    if manualCapture || candidateIsComplete(candidate) {
+                        apply(candidate, autoAdvance: true, forceEditor: manualCapture)
+                    }
+                } else if manualCapture {
+                    hasCandidate = true
+                    editorRevision += 1
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                if manualCapture {
+                    hasCandidate = true
+                    model.alertMessage = "Scan could not read every field. Edit the card details below or capture another photo."
+                    editorRevision += 1
+                }
+            }
+        }
+    }
+
+    private func apply(_ candidate: ScanCandidate, autoAdvance: Bool, forceEditor: Bool) {
+        let mergedCard = candidate.cardNumber ?? (cardNumber.isEmpty ? nil : CardRules.digitsOnly(cardNumber))
+        let mergedExpiry = candidate.expiry ?? (expiry.isEmpty ? nil : CardRules.formatExpiryInput(expiry))
+        let mergedCVV = candidate.cvv ?? (cvv.isEmpty ? nil : CardRules.digitsOnly(cvv))
+        let merged = ScanCandidate(
+            cardNumber: mergedCard,
+            expiry: mergedExpiry,
+            cvv: mergedCVV,
+            recognizedText: candidate.recognizedText,
+            network: CardRules.inferNetwork(mergedCard ?? ""),
+            confidence: candidate.confidence
+        )
+
+        cardNumber = merged.cardNumber ?? ""
+        expiry = merged.expiry ?? ""
+        cvv = merged.cvv ?? ""
+        hasCandidate = forceEditor || merged.hasCandidateData
+
+        if autoAdvance, candidateIsComplete(merged) {
+            advance(to: merged)
+        } else if hasCandidate {
+            editorRevision += 1
+        }
+    }
+
+    private func advance(to candidate: ScanCandidate) {
+        guard !didAdvance, candidateIsComplete(candidate) else { return }
+        didAdvance = true
+        focusedField = nil
+        model.routePath.append(.manualEntry(prefill: candidate))
+    }
+
+    private func resetForRescan() {
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        cardNumber = ""
+        expiry = ""
+        cvv = ""
+        hasCandidate = false
+        isProcessingFrame = false
+        didAdvance = false
+        focusedField = nil
+    }
+
+    private func candidateIsComplete(_ candidate: ScanCandidate) -> Bool {
+        guard let cardNumber = candidate.cardNumber,
+              let expiry = candidate.expiry,
+              let cvv = candidate.cvv
+        else { return false }
+        return candidateIsCompleteValues(card: cardNumber, expiry: expiry, cvv: cvv)
+    }
+
+    private func candidateIsCompleteValues(card: String, expiry: String, cvv: String) -> Bool {
+        CardRules.isValidCardNumber(card)
+            && CardRules.validateExpiry(expiry)
+            && CardRules.validateCVV(cvv)
     }
 }
 
 struct CameraCaptureView: UIViewControllerRepresentable {
+    var liveDetectionEnabled: Bool
     var onImage: (CGImage) -> Void
+    var onLiveFrame: (CGImage) -> Void
 
     func makeUIViewController(context: Context) -> CameraViewController {
         let controller = CameraViewController()
         controller.onImage = onImage
+        controller.onLiveFrame = onLiveFrame
+        controller.setLiveDetectionEnabled(liveDetectionEnabled)
         return controller
     }
 
-    func updateUIViewController(_ uiViewController: CameraViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: CameraViewController, context: Context) {
+        uiViewController.onImage = onImage
+        uiViewController.onLiveFrame = onLiveFrame
+        uiViewController.setLiveDetectionEnabled(liveDetectionEnabled)
+    }
+
+    static func dismantleUIViewController(_ uiViewController: CameraViewController, coordinator: Void) {
+        uiViewController.tearDown()
+    }
 }
 
-final class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate {
+final class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVCaptureVideoDataOutputSampleBufferDelegate {
     var onImage: ((CGImage) -> Void)?
+    var onLiveFrame: ((CGImage) -> Void)?
+
     private let session = AVCaptureSession()
-    private let output = AVCapturePhotoOutput()
+    private let photoOutput = AVCapturePhotoOutput()
+    private let videoOutput = AVCaptureVideoDataOutput()
+    private let sessionQueue = DispatchQueue(label: "com.vaultcard.camera.session", qos: .userInitiated)
+    private let videoOutputQueue = DispatchQueue(label: "com.vaultcard.camera.frames", qos: .userInitiated)
+    private let imageContext = CIContext(options: [.cacheIntermediates: false])
+    private let previewLayer = AVCaptureVideoPreviewLayer()
+    private var isConfigured = false
+    private var isPhotoCaptureInFlight = false
+    private var liveDetectionEnabled = false
+    private var lastFrameDeliveryTime: CFTimeInterval = 0
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .secondarySystemBackground
-        configure()
+        prepareCamera()
     }
 
-    private func configure() {
-        guard AVCaptureDevice.authorizationStatus(for: .video) != .denied,
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        startCaptureSession()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        stopCaptureSession()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer.frame = view.bounds
+    }
+
+    func setLiveDetectionEnabled(_ enabled: Bool) {
+        videoOutputQueue.async { [weak self] in
+            self?.liveDetectionEnabled = enabled
+        }
+    }
+
+    func tearDown() {
+        onImage = nil
+        onLiveFrame = nil
+        videoOutput.setSampleBufferDelegate(nil, queue: nil)
+        stopCaptureSession()
+    }
+
+    private func prepareCamera() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            configureSession()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        self?.configureSession()
+                    } else {
+                        self?.showFallbackMessage()
+                    }
+                }
+            }
+        default:
+            showFallbackMessage()
+        }
+    }
+
+    private func configureSession() {
+        guard !isConfigured,
               let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input),
-              session.canAddOutput(output)
+              session.canAddOutput(photoOutput),
+              session.canAddOutput(videoOutput)
         else {
             showFallbackMessage()
             return
         }
+
+        session.beginConfiguration()
+        if session.canSetSessionPreset(.hd1920x1080) {
+            session.sessionPreset = .hd1920x1080
+        } else if session.canSetSessionPreset(.hd1280x720) {
+            session.sessionPreset = .hd1280x720
+        }
         session.addInput(input)
-        session.addOutput(output)
-        let layer = AVCaptureVideoPreviewLayer(session: session)
-        layer.videoGravity = .resizeAspectFill
-        layer.frame = view.bounds
-        view.layer.addSublayer(layer)
+        session.addOutput(photoOutput)
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+        videoOutput.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ]
+        videoOutput.setSampleBufferDelegate(self, queue: videoOutputQueue)
+        session.addOutput(videoOutput)
+        if let connection = videoOutput.connection(with: .video),
+           connection.isVideoRotationAngleSupported(90) {
+            connection.videoRotationAngle = 90
+        }
+        session.commitConfiguration()
+        isConfigured = true
+
+        previewLayer.session = session
+        previewLayer.videoGravity = .resizeAspectFill
+        previewLayer.frame = view.bounds
+        view.layer.insertSublayer(previewLayer, at: 0)
+
         let button = UIButton(type: .system)
-        button.setTitle("Capture Card", for: .normal)
+        button.setImage(UIImage(systemName: "camera.fill"), for: .normal)
+        button.tintColor = .label
+        button.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.92)
+        button.layer.cornerRadius = 34
+        button.layer.borderWidth = 4
+        button.layer.borderColor = UIColor.white.withAlphaComponent(0.9).cgColor
+        button.imageView?.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 24, weight: .semibold)
+        button.accessibilityLabel = "Capture card"
+        button.accessibilityIdentifier = "scan.capture"
         button.addTarget(self, action: #selector(capture), for: .touchUpInside)
         button.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(button)
         NSLayoutConstraint.activate([
             button.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            button.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -20)
+            button.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -18),
+            button.widthAnchor.constraint(equalToConstant: 68),
+            button.heightAnchor.constraint(equalTo: button.widthAnchor)
         ])
-        Task.detached { [session] in session.startRunning() }
+        startCaptureSession()
+    }
+
+    private func startCaptureSession() {
+        guard isConfigured else { return }
+        sessionQueue.async { [session] in
+            guard !session.isRunning else { return }
+            session.startRunning()
+        }
+    }
+
+    private func stopCaptureSession() {
+        sessionQueue.async { [session] in
+            guard session.isRunning else { return }
+            session.stopRunning()
+        }
     }
 
     @objc private func capture() {
-        output.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
+        guard !isPhotoCaptureInFlight, session.isRunning else { return }
+        isPhotoCaptureInFlight = true
+        setLiveDetectionEnabled(false)
+        photoOutput.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
     }
 
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        defer { isPhotoCaptureInFlight = false }
         guard let data = photo.fileDataRepresentation(),
-              let image = UIImage(data: data)?.cgImage
+              let image = UIImage(data: data)?.normalizedCGImage
         else { return }
-        onImage?(image)
+        DispatchQueue.main.async { [weak self] in
+            self?.onImage?(image)
+        }
+    }
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard liveDetectionEnabled else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastFrameDeliveryTime >= 1.2,
+              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
+        else { return }
+
+        liveDetectionEnabled = false
+        lastFrameDeliveryTime = now
+        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        guard let cgImage = imageContext.createCGImage(image, from: image.extent) else {
+            liveDetectionEnabled = true
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.onLiveFrame?(cgImage)
+        }
     }
 
     private func showFallbackMessage() {
         let label = UILabel()
-        label.text = "Camera unavailable. Use text fallback or manual entry."
+        label.text = "Camera unavailable. Enter the card manually instead."
         label.textAlignment = .center
         label.numberOfLines = 0
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -1729,74 +3058,44 @@ final class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegat
     }
 }
 
+private extension UIImage {
+    var normalizedCGImage: CGImage? {
+        if imageOrientation == .up { return cgImage }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let normalized = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            draw(in: CGRect(origin: .zero, size: size))
+        }
+        return normalized.cgImage
+    }
+}
+
 struct CardDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     let cardID: String
-    @State private var revealedNumber: String?
+    @State private var revealedCredentials: CardCredentials?
     @State private var hideTask: Task<Void, Never>?
     @State private var confirmDelete = false
 
     var card: VaultCard? { model.cards.first { $0.id == cardID } }
 
     var body: some View {
-        List {
-            if let card {
-                if card.fetchFailureCount > 0 {
-                    Section {
-                        Text(card.lastFetchedAt == nil ? "Balance refresh has failed \(card.fetchFailureCount) time(s). The card has not been synced yet." : "Balance data may be stale. Refresh has failed \(card.fetchFailureCount) time(s) since the last successful sync.")
-                            .foregroundStyle(.red)
-                    }
+        ZStack {
+            VaultBackground()
+            ScrollView {
+                if let card {
+                    detailContent(card)
+                    .padding(20)
+                    .padding(.bottom, 72)
+                } else {
+                    ContentUnavailableView("Card unavailable", systemImage: "creditcard.trianglebadge.exclamationmark", description: Text("This card may have been deleted."))
                 }
-                Section {
-                    Text(card.network.displayName)
-                    Text(card.balance.map { $0.formatted(.currency(code: "USD")) } ?? "Balance unavailable").font(.title)
-                    Text("Expires \(card.expiry)")
-                    Text("Last updated \(card.lastFetchedAt?.formatted() ?? "Never")")
-                    Button("Refresh In GiftCardMall") { model.routePath.append(.giftCardMall(cardID)) }
-                }
-                Section("Sensitive Details") {
-                    HStack {
-                        Text(revealedNumber ?? CardRules.mask(last4: card.last4))
-                        Spacer()
-                        Button(model.isAuthenticating ? "Checking..." : "Reveal") {
-                            Task {
-                                do {
-                                    revealedNumber = try await model.revealCardNumber(id: cardID)
-                                    scheduleHide()
-                                } catch {
-                                    model.alertMessage = error.localizedDescription
-                                }
-                            }
-                        }
-                        .accessibilityIdentifier("detail.reveal")
-                    }
-                }
-                Section("Transactions") {
-                    if card.transactions.isEmpty {
-                        Text("No transaction history available.")
-                    } else {
-                        ForEach(card.transactions) { tx in
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(tx.description)
-                                    Text(tx.date.formatted(date: .abbreviated, time: .omitted)).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Text(tx.amount.formatted(.currency(code: "USD")))
-                            }
-                        }
-                    }
-                }
-            } else {
-                ContentUnavailableView("Card unavailable", systemImage: "creditcard.trianglebadge.exclamationmark", description: Text("This card may have been deleted."))
             }
         }
         .navigationTitle(card?.displayName ?? "Card")
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button { Task { model.alertMessage = describe(await model.refreshCard(id: cardID)) } } label: { Image(systemName: "arrow.clockwise") }
-                    .accessibilityIdentifier("detail.refresh")
+            ToolbarItem(placement: .topBarTrailing) {
                 Button(role: .destructive) {
                     confirmDelete = true
                 } label: { Image(systemName: "trash") }
@@ -1820,80 +3119,291 @@ struct CardDetailView: View {
         .onDisappear { clearReveal() }
     }
 
+    private func detailContent(_ card: VaultCard) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VaultCardArtwork(card: card, revealedCardNumber: revealedCredentials?.cardNumber)
+            topActions(card)
+            Text("Overview")
+                .font(.headline)
+            failureBanner(card)
+            balancePanel(card)
+            cardDetailsPanel(card)
+            transactionPanel(card)
+            Label("Secure details never leave your device.", systemImage: "lock.fill")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private func failureBanner(_ card: VaultCard) -> some View {
+        if card.fetchFailureCount > 0 {
+            let message = card.lastFetchedAt == nil
+                ? "Balance refresh has failed \(card.fetchFailureCount) time(s)."
+                : "Balance may be stale after \(card.fetchFailureCount) failed refresh attempt(s)."
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(VaultTheme.warning)
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(VaultTheme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+        }
+    }
+
+    private func balancePanel(_ card: VaultCard) -> some View {
+        VaultSurface {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("BALANCE")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                Text(card.balance.map { $0.formatted(.currency(code: "USD")) } ?? "Unavailable")
+                    .font(.title2.bold())
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func cardDetailsPanel(_ card: VaultCard) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Card details").font(.headline)
+            VaultSurface(padding: 0) {
+                VStack(spacing: 0) {
+                    detailRow(
+                        "Card number",
+                        revealedCredentials.map { CardRules.formatCardNumber($0.cardNumber) } ?? CardRules.mask(last4: card.last4)
+                    )
+                    Divider().padding(.leading, 16)
+                    detailRow("Expires", card.expiry)
+                    Divider().padding(.leading, 16)
+                    detailRow("CVV", revealedCredentials?.cvv ?? "•••")
+                    Divider().padding(.leading, 16)
+                    detailRow("Network", card.network.displayName)
+                }
+            }
+        }
+    }
+
+    private func topActions(_ card: VaultCard) -> some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 12) {
+                cardActionButton(
+                    title: revealedCredentials == nil ? (model.isAuthenticating ? "Checking…" : "Reveal") : "Hide",
+                    systemImage: revealedCredentials == nil ? "eye.fill" : "eye.slash.fill",
+                    identifier: "detail.reveal",
+                    action: toggleReveal
+                )
+                cardActionButton(
+                    title: "Check Balance",
+                    systemImage: "arrow.clockwise",
+                    identifier: "detail.refresh"
+                ) {
+                    model.routePath.append(.giftCardMall(cardID))
+                }
+            }
+            Label(
+                card.lastFetchedAt.map { "Balance last checked \($0.formatted(date: .abbreviated, time: .shortened))" }
+                    ?? "Balance has not been checked yet",
+                systemImage: "clock"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    private func cardActionButton(title: String, systemImage: String, identifier: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.title3.weight(.semibold))
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, minHeight: 62)
+        }
+        .accessibilityIdentifier(identifier)
+        .vaultGlass(cornerRadius: 20, interactive: true)
+    }
+
+    private func transactionPanel(_ card: VaultCard) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Transactions").font(.headline)
+            VaultSurface(padding: 0) {
+                if card.transactions.isEmpty {
+                    Label("No transaction history available", systemImage: "clock.arrow.circlepath")
+                        .foregroundStyle(.secondary)
+                        .padding(16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(card.transactions.enumerated()), id: \.element.id) { index, tx in
+                            transactionRow(tx)
+                            if index < card.transactions.count - 1 { Divider().padding(.leading, 56) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func transactionRow(_ transaction: CardTransaction) -> some View {
+        HStack {
+            VaultRowIcon(symbol: "bag.fill", color: VaultTheme.electricBlue)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(transaction.description).font(.subheadline.weight(.medium))
+                Text(transaction.date.formatted(date: .abbreviated, time: .omitted))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(transaction.amount.formatted(.currency(code: "USD")))
+                .font(.subheadline.weight(.semibold))
+        }
+        .padding(14)
+    }
+
+    private func toggleReveal() {
+        if revealedCredentials != nil {
+            clearReveal()
+        } else {
+            Task {
+                do {
+                    revealedCredentials = try await model.revealCardCredentials(id: cardID)
+                    scheduleHide()
+                } catch {
+                    model.alertMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func detailRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.subheadline.weight(.medium))
+                .monospacedDigit()
+        }
+        .padding(16)
+    }
+
     private func scheduleHide() {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(for: .seconds(30))
             if !Task.isCancelled {
-                revealedNumber = nil
+                revealedCredentials = nil
             }
         }
     }
 
     private func clearReveal() {
         hideTask?.cancel()
-        revealedNumber = nil
+        revealedCredentials = nil
     }
 
-    private func describe(_ outcome: RefreshOutcome) -> String {
-        switch outcome {
-        case .success:
-            return "Balance refreshed."
-        case .failure(let failure):
-            return failure.message
-        case .cooldown(let date):
-            return "Refresh available again at \(date.formatted())."
-        }
-    }
 }
 
 struct GiftCardMallRefreshView: View {
     @Environment(AppModel.self) private var model
     let cardID: String
     @State private var summary: GiftCardMallSummaryCapture?
-    @State private var status = "Clear any challenge if prompted, then use secure autofill and submit inside GiftCardMall."
+    @State private var credentials: CardCredentials?
+    @State private var isPageLoading = true
+    @State private var isPreparingAutofill = false
+    @State private var isBrowserReady = false
+    @State private var preparationError: String?
 
     var body: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(status)
-                HStack {
-                    Button("Secure Autofill") {
-                        Task {
-                            do {
-                                let credentials = try await model.credentialsForAutofill(id: cardID)
-                                NotificationCenter.default.post(name: .giftCardMallAutofill, object: credentials)
-                                status = "Best-effort autofill sent. Review the fields and submit inside GiftCardMall."
-                            } catch {
-                                status = error.localizedDescription
-                            }
+        ZStack {
+            VaultBackground()
+            if isBrowserReady {
+                GiftCardMallWebView(
+                    credentials: credentials,
+                    onLoadingChange: { isPageLoading = $0 }
+                ) { body, url in
+                    do {
+                        if let captured = try GiftCardMallBridge.parseSummary(body, sourceURL: url) {
+                            summary = captured
+                            let existingTransactions = model.cards.first { $0.id == cardID }?.transactions ?? []
+                            model.applyForegroundRefresh(
+                                id: cardID,
+                                result: BalanceResult(balance: captured.balance, transactions: existingTransactions, fetchedAt: Date())
+                            )
+                            return
                         }
-                    }
-                    Button("Reload Page") {
-                        NotificationCenter.default.post(name: .giftCardMallReload, object: nil)
+                        if let summary, let result = try GiftCardMallBridge.parseTransactions(body, sourceURL: url, summary: summary) {
+                            guard !result.transactions.isEmpty else { return }
+                            model.applyForegroundRefresh(id: cardID, result: result)
+                        }
+                    } catch {
+                        model.alertMessage = error.localizedDescription
                     }
                 }
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+            } else if let preparationError {
+                ContentUnavailableView(
+                    "Balance check unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(preparationError)
+                )
+                .padding(24)
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.thinMaterial)
-            GiftCardMallWebView { body, url in
-                do {
-                    if let captured = try GiftCardMallBridge.parseSummary(body, sourceURL: url) {
-                        summary = captured
-                        status = "GiftCardMall session connected. Balance summary captured."
-                        return
-                    }
-                    if let summary, let result = try GiftCardMallBridge.parseTransactions(body, sourceURL: url, summary: summary) {
-                        model.applyForegroundRefresh(id: cardID, result: result)
-                        status = "VaultCard synced the latest balance and transactions from the active GiftCardMall session."
-                    }
-                } catch {
-                    status = error.localizedDescription
-                }
+            if !isBrowserReady && preparationError == nil {
+                ProgressView("Opening secure balance check…")
+                    .padding(16)
+                    .vaultGlass(cornerRadius: 18)
+            } else if isBrowserReady && isPageLoading {
+                ProgressView("Loading GiftCardMall…")
+                    .padding(16)
+                    .vaultGlass(cornerRadius: 18)
             }
         }
-        .navigationTitle("GiftCardMall Refresh")
+        .navigationTitle("Check Balance")
+        .task { await prepareBrowserAfterTransition() }
+        .onDisappear { credentials = nil }
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    if let credentials {
+                        NotificationCenter.default.post(name: .giftCardMallAutofill, object: credentials)
+                    }
+                } label: {
+                    Image(systemName: "rectangle.and.pencil.and.ellipsis")
+                }
+                .accessibilityLabel("Autofill Again")
+                .disabled(credentials == nil || isPreparingAutofill || !isBrowserReady)
+
+                Button {
+                    NotificationCenter.default.post(name: .giftCardMallReload, object: nil)
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .accessibilityLabel("Reload Page")
+                .disabled(!isBrowserReady)
+            }
+        }
+    }
+
+    private func prepareBrowserAfterTransition() async {
+        guard credentials == nil, !isPreparingAutofill else { return }
+        isPreparingAutofill = true
+        defer { isPreparingAutofill = false }
+
+        // Constructing WKWebView can briefly occupy the main thread. Let the native
+        // navigation animation finish first so the detail-to-browser push stays fluid.
+        try? await Task.sleep(for: .milliseconds(300))
+        guard !Task.isCancelled else { return }
+        do {
+            credentials = try await model.credentialsForAutofill(id: cardID)
+            isBrowserReady = true
+        } catch {
+            preparationError = error.localizedDescription
+        }
     }
 }
 
@@ -1903,24 +3413,38 @@ extension Notification.Name {
 }
 
 struct GiftCardMallWebView: UIViewRepresentable {
+    var credentials: CardCredentials?
+    var onLoadingChange: (Bool) -> Void
     var onMessage: (Any, URL?) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onMessage: onMessage)
+        Coordinator(onLoadingChange: onLoadingChange, onMessage: onMessage)
     }
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
         configuration.userContentController.add(context.coordinator, name: GiftCardMallBridge.handlerName)
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
         webView.navigationDelegate = context.coordinator
+        webView.scrollView.isScrollEnabled = true
+        webView.scrollView.bounces = true
+        webView.scrollView.alwaysBounceVertical = true
+        webView.scrollView.keyboardDismissMode = .interactive
         context.coordinator.webView = webView
+        context.coordinator.updateCredentials(credentials)
         webView.load(URLRequest(url: GiftCardMallBridge.siteURL))
         context.coordinator.installObservers()
         return webView
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {}
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        context.coordinator.onLoadingChange = onLoadingChange
+        context.coordinator.onMessage = onMessage
+        context.coordinator.updateCredentials(credentials)
+    }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: GiftCardMallBridge.handlerName)
@@ -1928,21 +3452,55 @@ struct GiftCardMallWebView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        var onLoadingChange: (Bool) -> Void
         var onMessage: (Any, URL?) -> Void
         weak var webView: WKWebView?
         private var tokens: [NSObjectProtocol] = []
+        private var credentials: CardCredentials?
+        private var lastAppliedCredentials: CardCredentials?
+        private var pageReady = false
 
-        init(onMessage: @escaping (Any, URL?) -> Void) {
+        init(onLoadingChange: @escaping (Bool) -> Void, onMessage: @escaping (Any, URL?) -> Void) {
+            self.onLoadingChange = onLoadingChange
             self.onMessage = onMessage
+        }
+
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            pageReady = false
+            lastAppliedCredentials = nil
+            onLoadingChange(true)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard GiftCardMallBridge.isAllowed(webView.url) else { return }
-            webView.evaluateJavaScript(GiftCardMallBridge.installScript())
+            webView.evaluateJavaScript(GiftCardMallBridge.installScript()) { [weak self] _, _ in
+                guard let self else { return }
+                self.pageReady = true
+                self.onLoadingChange(false)
+                self.applyAutofillIfReady()
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            onLoadingChange(false)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            onLoadingChange(false)
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            decisionHandler(GiftCardMallBridge.isAllowed(navigationAction.request.url) ? .allow : .cancel)
+            if let targetFrame = navigationAction.targetFrame, !targetFrame.isMainFrame {
+                // GiftCardMall may embed a third-party anti-bot challenge. It can run in
+                // its subframe, but the top-level browser remains pinned to GiftCardMall.
+                decisionHandler(.allow)
+                return
+            }
+            guard GiftCardMallBridge.isAllowed(navigationAction.request.url) else {
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -1952,8 +3510,9 @@ struct GiftCardMallWebView: UIViewRepresentable {
 
         func installObservers() {
             tokens.append(NotificationCenter.default.addObserver(forName: .giftCardMallAutofill, object: nil, queue: .main) { [weak self] notification in
-                guard let credentials = notification.object as? CardCredentials, let webView = self?.webView, GiftCardMallBridge.isAllowed(webView.url) else { return }
-                webView.evaluateJavaScript(GiftCardMallBridge.autofillScript(credentials: credentials))
+                guard let credentials = notification.object as? CardCredentials else { return }
+                self?.lastAppliedCredentials = nil
+                self?.updateCredentials(credentials)
             })
             tokens.append(NotificationCenter.default.addObserver(forName: .giftCardMallReload, object: nil, queue: .main) { [weak self] _ in
                 self?.webView?.reload()
@@ -1964,6 +3523,124 @@ struct GiftCardMallWebView: UIViewRepresentable {
             tokens.forEach(NotificationCenter.default.removeObserver)
             tokens.removeAll()
         }
+
+        func updateCredentials(_ credentials: CardCredentials?) {
+            if self.credentials != credentials {
+                lastAppliedCredentials = nil
+            }
+            self.credentials = credentials
+            applyAutofillIfReady()
+        }
+
+        private func applyAutofillIfReady() {
+            guard pageReady,
+                  let credentials,
+                  let webView,
+                  lastAppliedCredentials != credentials,
+                  GiftCardMallBridge.isAllowed(webView.url)
+            else { return }
+            lastAppliedCredentials = credentials
+            webView.evaluateJavaScript(GiftCardMallBridge.autofillScript(credentials: credentials))
+        }
+
+    }
+}
+
+struct VaultAppIconChoice: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let alternateIconName: String?
+    let previewAssetName: String
+}
+
+enum VaultAppIcons {
+    static let choices = [
+        VaultAppIconChoice(
+            id: "primary",
+            title: "Card Stack",
+            alternateIconName: nil,
+            previewAssetName: "VaultCardIconPreview"
+        )
+    ]
+}
+
+struct AppIconPickerView: View {
+    @State private var selectedIconName = UIApplication.shared.alternateIconName
+    @State private var isChanging = false
+    @State private var errorMessage: String?
+
+    private let columns = [GridItem(.adaptive(minimum: 132), spacing: 18)]
+
+    var body: some View {
+        ZStack {
+            VaultBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("Choose the icon VaultCard uses on your Home Screen. Additional installed designs will appear here as they’re added to the app.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+
+                    LazyVGrid(columns: columns, spacing: 18) {
+                        ForEach(VaultAppIcons.choices) { choice in
+                            Button { select(choice) } label: {
+                                VStack(spacing: 10) {
+                                    Image(choice.previewAssetName)
+                                        .resizable()
+                                        .scaledToFit()
+                                        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                                        .overlay(alignment: .topTrailing) {
+                                            if selectedIconName == choice.alternateIconName {
+                                                Image(systemName: "checkmark.circle.fill")
+                                                    .font(.title2)
+                                                    .symbolRenderingMode(.palette)
+                                                    .foregroundStyle(.white, VaultTheme.electricBlue)
+                                                    .padding(8)
+                                            }
+                                        }
+                                    Text(choice.title)
+                                        .font(.subheadline.weight(.semibold))
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isChanging || selectedIconName == choice.alternateIconName)
+                            .accessibilityLabel("\(choice.title) app icon")
+                            .accessibilityValue(selectedIconName == choice.alternateIconName ? "Selected" : "Available")
+                        }
+                    }
+
+                    if VaultAppIcons.choices.count == 1 {
+                        Label("More icon choices can be added without changing this screen.", systemImage: "square.grid.2x2")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(VaultTheme.danger)
+                    }
+                }
+                .padding(20)
+            }
+        }
+        .navigationTitle("App Icon")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func select(_ choice: VaultAppIconChoice) {
+        guard selectedIconName != choice.alternateIconName else { return }
+        isChanging = true
+        errorMessage = nil
+        UIApplication.shared.setAlternateIconName(choice.alternateIconName) { error in
+            Task { @MainActor in
+                isChanging = false
+                if let error {
+                    errorMessage = error.localizedDescription
+                } else {
+                    selectedIconName = choice.alternateIconName
+                }
+            }
+        }
     }
 }
 
@@ -1972,18 +3649,81 @@ struct SettingsView: View {
 
     var body: some View {
         @Bindable var model = model
-        Form {
-            Section {
-                Toggle("App Lock", isOn: Binding(get: { model.settings.appLockEnabled }, set: { value in model.updateSettings { $0.appLockEnabled = value } }))
-                Toggle("Analytics", isOn: Binding(get: { model.settings.analyticsEnabled }, set: { value in model.updateSettings { $0.analyticsEnabled = value } }))
+        ZStack {
+            VaultBackground()
+            Form {
+                Section("Adding Cards") {
+                    Picker(
+                        "Default add method",
+                        selection: Binding(
+                            get: { model.settings.addCardPreference },
+                            set: { value in model.updateSettings { $0.addCardPreference = value } }
+                        )
+                    ) {
+                        ForEach(AddCardPreference.allCases) { preference in
+                            Text(preference.label).tag(preference)
+                        }
+                    }
+                    Text("The center plus button opens this method directly. Manual entry remains available from the scan screen.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Section("Security") {
+                    Label("Face ID", systemImage: "faceid")
+                    Toggle(isOn: Binding(get: { model.settings.appLockEnabled }, set: { value in model.updateSettings { $0.appLockEnabled = value } })) {
+                        Label("App Lock", systemImage: "lock.fill")
+                    }
+                    Toggle(isOn: Binding(get: { model.settings.analyticsEnabled }, set: { value in model.updateSettings { $0.analyticsEnabled = value } })) {
+                        Label("Private Analytics", systemImage: "chart.bar.fill")
+                    }
+                }
+                Section("Alerts") {
+                    Toggle(isOn: Binding(get: { model.settings.notificationPreferences.expiryWarning }, set: { value in model.updateSettings { $0.notificationPreferences.expiryWarning = value } })) {
+                        Label("Expiry warnings", systemImage: "calendar.badge.exclamationmark")
+                    }
+                    Toggle(isOn: Binding(get: { model.settings.notificationPreferences.lowBalance }, set: { value in model.updateSettings { $0.notificationPreferences.lowBalance = value } })) {
+                        Label("Low balance alerts", systemImage: "exclamationmark.circle.fill")
+                    }
+                    Toggle(isOn: Binding(get: { model.settings.notificationPreferences.balanceUpdated }, set: { value in model.updateSettings { $0.notificationPreferences.balanceUpdated = value } })) {
+                        Label("Balance updated", systemImage: "arrow.clockwise.circle.fill")
+                    }
+                    Toggle(isOn: Binding(get: { model.settings.notificationPreferences.refreshFailed }, set: { value in model.updateSettings { $0.notificationPreferences.refreshFailed = value } })) {
+                        Label("Refresh failed", systemImage: "wifi.exclamationmark")
+                    }
+                }
+                Section("Privacy") {
+                    Toggle(isOn: Binding(get: { model.settings.notificationPreferences.privacyPreservingContent }, set: { value in model.updateSettings { $0.notificationPreferences.privacyPreservingContent = value } })) {
+                        Label("Privacy-preserving content", systemImage: "hand.raised.fill")
+                    }
+                    Text("Card data and sensitive details stay on this device.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Section("Appearance") {
+                    NavigationLink {
+                        AppIconPickerView()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image("VaultCardIconPreview")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 42, height: 42)
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("App Icon")
+                                Text("Card Stack")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("settings.appIcon")
+                }
+                Section("About") {
+                    LabeledContent("Version", value: "1.0")
+                }
             }
-            Section("Notifications") {
-                Toggle("Expiry warnings", isOn: Binding(get: { model.settings.notificationPreferences.expiryWarning }, set: { value in model.updateSettings { $0.notificationPreferences.expiryWarning = value } }))
-                Toggle("Low balance alerts", isOn: Binding(get: { model.settings.notificationPreferences.lowBalance }, set: { value in model.updateSettings { $0.notificationPreferences.lowBalance = value } }))
-                Toggle("Balance updated", isOn: Binding(get: { model.settings.notificationPreferences.balanceUpdated }, set: { value in model.updateSettings { $0.notificationPreferences.balanceUpdated = value } }))
-                Toggle("Refresh failed", isOn: Binding(get: { model.settings.notificationPreferences.refreshFailed }, set: { value in model.updateSettings { $0.notificationPreferences.refreshFailed = value } }))
-                Toggle("Privacy-preserving content", isOn: Binding(get: { model.settings.notificationPreferences.privacyPreservingContent }, set: { value in model.updateSettings { $0.notificationPreferences.privacyPreservingContent = value } }))
-            }
+            .scrollContentBackground(.hidden)
         }
         .navigationTitle("Settings")
     }
@@ -1994,7 +3734,7 @@ struct LockOverlayView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "lock").font(.system(size: 56))
+            VaultBrandMark(size: 88)
             Text("VaultCard is locked").font(.title2.bold())
             Text("Authenticate with biometrics or device passcode to continue.")
                 .multilineTextAlignment(.center)
@@ -2002,14 +3742,15 @@ struct LockOverlayView: View {
             Button(model.isAuthenticating ? "Unlocking..." : "Unlock") {
                 Task { await model.unlockIfNeeded() }
             }
-            .buttonStyle(.borderedProminent)
+            .font(.headline)
+            .controlSize(.large)
+            .vaultPrimaryButton()
             .disabled(model.isAuthenticating)
         }
         .padding(28)
         .frame(maxWidth: 340)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .vaultGlass(cornerRadius: 28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
+        .background(VaultBackground())
     }
 }

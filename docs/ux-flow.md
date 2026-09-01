@@ -12,9 +12,7 @@ This document describes the implemented Android-first MVP user journey and the i
    - entering details manually
 5. User reviews the saved card in card detail.
 6. User reveals sensitive fields only after biometric authentication.
-7. User refreshes card data either:
-   - through the built-in direct refresh path, or
-   - through the foreground GiftCardMall browser session flow
+7. User checks a card's balance and recent activity through the foreground GiftCardMall browser session. Selecting `Check Balance` opens that embedded session directly; VaultCard does not attempt automatic or background refresh.
 8. User adjusts app lock, analytics, and notification preferences in settings.
 
 ## Route Map
@@ -67,22 +65,23 @@ Key states:
 - populated list with sort menu
 
 Actions:
-- pull to refresh all cards
+- filter cards that need a balance check
 - open settings
 - sort cards
 - open card detail
 - floating `Add Card`
 
-### Add Card Choice
+### Add Card
 
 File: [add_card_screen.dart](C:/Users/sumit/OneDrive/Documents/New%20project/lib/src/presentation/screens/add_card_screen.dart)
 
 Purpose:
-- let the user choose between scan and manual entry
+- start the preferred card-entry method
+- default the primary add action to camera scanning
 
 Actions:
 - `Scan Card`
-- `Enter Manually`
+- `Enter Manually` remains available from the scan screen and as a user preference in Settings
 
 ### Card Entry Form
 
@@ -115,12 +114,13 @@ Behavior:
 - initializes camera on load
 - shows capture frame guidance
 - processes captured image locally
-- falls back to manual OCR text paste/edit path
+- presents an editable confirmation when a capture is incomplete or needs correction
 
 Primary actions:
 - `Capture Card`
-- `Use text fallback`
-- `Use Text Result`
+- `Confirm`
+- `Re-scan`
+- `Enter card manually`
 
 Exit:
 - routes to card entry form with extracted values
@@ -139,8 +139,7 @@ Sections:
 - transactions card
 
 Actions:
-- app bar refresh
-- open GiftCardMall foreground refresh
+- open GiftCardMall foreground balance check
 - reveal card number
 - delete card
 
@@ -148,19 +147,20 @@ Security behavior:
 - reveals require biometric authentication
 - revealed values auto-hide after timeout
 
-### GiftCardMall Foreground Refresh
+### GiftCardMall Foreground Balance Check
 
 File: [gift_card_mall_refresh_screen.dart](C:/Users/sumit/OneDrive/Documents/New%20project/lib/src/presentation/screens/gift_card_mall_refresh_screen.dart)
 
 Purpose:
-- support GiftCardMall refresh through a foreground browser session when direct HTTP is blocked
+- support GiftCardMall balance and transaction checks through a foreground browser session
 
 Behavior:
 - loads GiftCardMall in a WebView
 - user can clear the anti-bot challenge in-page
-- secure autofill requires biometric auth
+- secure autofill uses the already-unlocked on-device vault without a second authentication interruption
 - JS bridge listens for balance summary and transaction API calls
 - syncs successful result back into VaultCard
+- no automatic or background refresh is attempted; the user starts each check explicitly
 
 Primary actions:
 - `Secure Autofill`
@@ -189,5 +189,5 @@ Settings:
 
 - privacy-first: card credentials are treated as sensitive and only revealed on demand
 - local-first: saved card vaulting works without a hosted backend
-- fallback-friendly: scan and refresh flows include degraded paths when automation fails
+- recovery-friendly: incomplete scans remain editable, and foreground balance checks provide clear in-page recovery guidance when automation is unavailable
 - Android-first practicality: flows are designed to be verifiable on Android before iOS is finalized
