@@ -2417,7 +2417,7 @@ struct CardListView: View {
             if let card = latestSwipeArchivedCard {
                 swipeArchiveToast(for: card)
                     .padding(.horizontal, 20)
-                    .padding(.bottom, 12)
+                    .padding(.bottom, VaultFloatingBar.overlayClearance)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(1)
             }

@@ -116,6 +116,35 @@ final class VaultCardUITests: XCTestCase {
         XCTAssertFalse(app.buttons["cards.add"].isEnabled)
     }
 
+    func testFloatingTraySupportsTapsAndScrubNavigation() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launch()
+
+        completeOnboardingIfNeeded(app)
+
+        let vault = app.buttons["tray.vault"]
+        let settings = app.buttons["tray.settings"]
+        XCTAssertTrue(vault.waitForExistence(timeout: 5))
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+
+        settings.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+
+        vault.tap()
+        XCTAssertTrue(app.navigationBars["Vault"].waitForExistence(timeout: 5))
+
+        let vaultCenter = vault.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let settingsCenter = settings.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        vaultCenter.press(forDuration: 0.4, thenDragTo: settingsCenter)
+
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+
+        settingsCenter.press(forDuration: 0.4, thenDragTo: vaultCenter)
+
+        XCTAssertTrue(app.navigationBars["Vault"].waitForExistence(timeout: 5))
+    }
+
     private func completeOnboardingIfNeeded(_ app: XCUIApplication) {
         let primary = app.buttons["onboarding.primary"]
         if primary.waitForExistence(timeout: 3) {

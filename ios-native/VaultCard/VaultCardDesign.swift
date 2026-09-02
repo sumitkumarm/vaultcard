@@ -239,66 +239,190 @@ struct VaultCardArtwork: View {
 }
 
 struct VaultFloatingBar: View {
+    static let overlayClearance = Layout.barHeight + Layout.bottomPadding + Layout.overlaySpacing
+
+    private enum Destination {
+        case vault
+        case settings
+    }
+
+    private enum Layout {
+        static let navigationItemSize: CGFloat = 44
+        static let addItemSize: CGFloat = 54
+        static let itemSpacing: CGFloat = 34
+        static let horizontalPadding: CGFloat = 12
+        static let verticalPadding: CGFloat = 8
+        static let bottomPadding: CGFloat = 4
+        static let overlaySpacing: CGFloat = 12
+        static let contentWidth = navigationItemSize * 2 + addItemSize + itemSpacing * 2
+        static let barHeight = addItemSize + verticalPadding * 2
+    }
+
     let vaultSelected: Bool
     let addSelected: Bool
     let settingsSelected: Bool
     let showVault: () -> Void
     let addCard: () -> Void
     let showSettings: () -> Void
+    @Namespace private var selectionNamespace
+    @State private var scrubPreviewDestination: Destination?
 
     var body: some View {
         Group {
             if #available(iOS 26.0, *) {
                 GlassEffectContainer(spacing: 16) {
                     barContent
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
+                        .padding(.horizontal, Layout.horizontalPadding)
+                        .padding(.vertical, Layout.verticalPadding)
                         .glassEffect(.regular.interactive(), in: .capsule)
                 }
             } else {
                 barContent
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, Layout.horizontalPadding)
+                    .padding(.vertical, Layout.verticalPadding)
                     .background(.ultraThinMaterial, in: Capsule())
                     .overlay { Capsule().stroke(.white.opacity(0.22), lineWidth: 1) }
             }
         }
         .padding(.horizontal, 28)
-        .padding(.bottom, 4)
+        .padding(.bottom, Layout.bottomPadding)
         .shadow(color: .black.opacity(0.16), radius: 12, y: 5)
     }
 
     private var barContent: some View {
-        HStack(spacing: 34) {
-            Button(action: showVault) {
-                Label("Vault", systemImage: "rectangle.stack.fill")
-                    .labelStyle(.iconOnly)
-                    .frame(width: 44, height: 44)
-            }
-            .accessibilityIdentifier("tray.vault")
-            .disabled(vaultSelected)
-            .foregroundStyle(vaultSelected ? VaultTheme.electricBlue : .primary)
+        HStack(spacing: Layout.itemSpacing) {
+            navigationButton(
+                destination: .vault,
+                label: "Vault",
+                symbol: "rectangle.stack.fill",
+                selected: vaultSelected,
+                action: showVault
+            )
             Button(action: addCard) {
                 Image(systemName: "plus")
                     .font(.title2.bold())
                     .foregroundStyle(.white)
-                    .frame(width: 54, height: 54)
-                    .background(addSelected ? Color.secondary : VaultTheme.electricBlue, in: Circle())
-                    .shadow(color: addSelected ? .clear : VaultTheme.electricBlue.opacity(0.4), radius: 14)
+                    .frame(width: Layout.addItemSize, height: Layout.addItemSize)
+                    .background(VaultTheme.electricBlue, in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(.white.opacity(addSelected ? 0.9 : 0), lineWidth: 3)
+                            .padding(-4)
+                    }
+                    .shadow(
+                        color: VaultTheme.electricBlue.opacity(addSelected ? 0.68 : 0.4),
+                        radius: addSelected ? 18 : 14
+                    )
             }
             .accessibilityLabel("Add Card")
             .accessibilityIdentifier("cards.add")
+            .accessibilityHint(addSelected ? "Add card is already open" : "Opens the add card flow")
+            .accessibilityAddTraits(addSelected ? .isSelected : [])
             .disabled(addSelected)
-            Button(action: showSettings) {
-                Label("Settings", systemImage: "gearshape.fill")
-                    .labelStyle(.iconOnly)
-                    .frame(width: 44, height: 44)
-            }
-            .accessibilityIdentifier("tray.settings")
-            .disabled(settingsSelected)
-            .foregroundStyle(settingsSelected ? VaultTheme.electricBlue : .primary)
+            navigationButton(
+                destination: .settings,
+                label: "Settings",
+                symbol: "gearshape.fill",
+                selected: settingsSelected,
+                action: showSettings
+            )
         }
         .buttonStyle(.plain)
+        .coordinateSpace(name: "vault-floating-bar")
+    }
+
+    @ViewBuilder
+    private func navigationButton(
+        destination: Destination,
+        label: String,
+        symbol: String,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        let visuallySelected = scrubPreviewDestination.map { $0 == destination } ?? selected
+        let button = Button {
+            guard !selected else { return }
+            action()
+        } label: {
+            ZStack {
+                if visuallySelected {
+                    selectionLens
+                }
+                Image(systemName: symbol)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(visuallySelected ? VaultTheme.electricBlue : Color.secondary)
+            }
+            .frame(width: Layout.navigationItemSize, height: Layout.navigationItemSize)
+            .contentShape(Circle())
+        }
+        .accessibilityIdentifier(destination == .vault ? "tray.vault" : "tray.settings")
+        .accessibilityLabel(label)
+        .accessibilityHint(
+            selected
+                ? "Current destination. Press and hold, then drag to switch destinations."
+                : "Opens \(label)."
+        )
+        .accessibilityAddTraits(selected ? .isSelected : [])
+
+        if selected {
+            button.highPriorityGesture(scrubGesture)
+        } else {
+            button
+        }
+    }
+
+    @ViewBuilder
+    private var selectionLens: some View {
+        if #available(iOS 26.0, *) {
+            Color.clear
+                .frame(width: Layout.navigationItemSize, height: Layout.navigationItemSize)
+                .glassEffect(
+                    .regular.tint(VaultTheme.electricBlue.opacity(0.32)).interactive(),
+                    in: .circle
+                )
+                .glassEffectID("vault-floating-bar-selection", in: selectionNamespace)
+        } else {
+            Circle()
+                .fill(VaultTheme.electricBlue.opacity(0.18))
+                .overlay {
+                    Circle().stroke(VaultTheme.electricBlue.opacity(0.38), lineWidth: 1)
+                }
+                .frame(width: Layout.navigationItemSize, height: Layout.navigationItemSize)
+                .matchedGeometryEffect(id: "vault-floating-bar-selection", in: selectionNamespace)
+        }
+    }
+
+    private var scrubGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.28, maximumDistance: 12)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("vault-floating-bar")))
+            .onChanged { value in
+                guard case .second(true, let drag?) = value else { return }
+                let destination = scrubDestination(at: drag.location.x)
+                guard scrubPreviewDestination != destination else { return }
+                withAnimation(.snappy) {
+                    scrubPreviewDestination = destination
+                }
+            }
+            .onEnded { value in
+                defer {
+                    withAnimation(.snappy) {
+                        scrubPreviewDestination = nil
+                    }
+                }
+                guard case .second(true, let drag?) = value else { return }
+                switch scrubDestination(at: drag.location.x) {
+                case .vault:
+                    guard !vaultSelected else { return }
+                    showVault()
+                case .settings:
+                    guard !settingsSelected else { return }
+                    showSettings()
+                }
+            }
+    }
+
+    private func scrubDestination(at x: CGFloat) -> Destination {
+        x <= Layout.contentWidth / 2 ? .vault : .settings
     }
 }
 
