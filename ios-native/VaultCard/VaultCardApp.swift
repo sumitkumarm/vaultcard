@@ -1752,9 +1752,22 @@ struct AppEnvironment {
         let context = ModelContext(container)
         let notificationService = NoopNotificationService()
         let cardRepository = SwiftDataCardRepository(context: context, credentialStore: InMemoryCredentialStore())
+        let settingsRepository = InMemorySettingsRepository()
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing-seed-cards") {
+            var settings = settingsRepository.load()
+            settings.onboardingCompleted = true
+            settingsRepository.save(settings)
+            for input in [
+                CardInput(cardNumber: "4111111111111111", expiry: "09/29", cvv: "123", nickname: "Test Aurora"),
+                CardInput(cardNumber: "4012888888881881", expiry: "09/29", cvv: "123", nickname: "Test Atlas"),
+                CardInput(cardNumber: "5555555555554444", expiry: "09/29", cvv: "123", nickname: "Test Nova")
+            ] {
+                _ = try cardRepository.addCard(input)
+            }
+        }
         return AppEnvironment(
             cardRepository: cardRepository,
-            settingsRepository: InMemorySettingsRepository(),
+            settingsRepository: settingsRepository,
             biometricService: AlwaysAllowAuthenticationService(),
             notificationService: notificationService,
             scanner: StaticCardScanner()
@@ -2116,15 +2129,8 @@ struct RootView: View {
                             }
                         }
                 }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    VaultFloatingBar(
-                        vaultSelected: model.isShowingVault || model.isShowingArchived,
-                        addSelected: model.isShowingAddFlow,
-                        settingsSelected: model.isShowingSettings,
-                        showVault: { withAnimation(.snappy) { model.showVault() } },
-                        addCard: { withAnimation(.snappy) { model.showPreferredAddFlow() } },
-                        showSettings: { withAnimation(.snappy) { model.showSettings() } }
-                    )
+                .vaultFloatingBar {
+                    floatingBar
                 }
             } else {
                 OnboardingView()
@@ -2146,6 +2152,28 @@ struct RootView: View {
             } else if phase == .active {
                 Task { await model.unlockIfNeeded() }
             }
+        }
+    }
+
+    private var floatingBar: some View {
+        VaultFloatingBar(
+            vaultSelected: model.isShowingVault || model.isShowingArchived,
+            addSelected: model.isShowingAddFlow,
+            settingsSelected: model.isShowingSettings,
+            showVault: { withAnimation(.snappy) { model.showVault() } },
+            addCard: { withAnimation(.snappy) { model.showPreferredAddFlow() } },
+            showSettings: { withAnimation(.snappy) { model.showSettings() } }
+        )
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func vaultFloatingBar<Bar: View>(@ViewBuilder bar: () -> Bar) -> some View {
+        if #available(iOS 26.0, *) {
+            safeAreaBar(edge: .bottom, spacing: 0, content: bar)
+        } else {
+            safeAreaInset(edge: .bottom, spacing: 0, content: bar)
         }
     }
 }
@@ -2340,10 +2368,12 @@ struct CardListView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                     .cardListRowStyle(verticalPadding: 14)
+                    .accessibilityIdentifier("cards.privacy.footer")
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .environment(\.defaultMinListRowHeight, 1)
+            .vaultFloatingBarScrollClearance()
             .navigationTitle("Vault")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -2904,6 +2934,7 @@ struct ArchivedCardsView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .environment(\.defaultMinListRowHeight, 1)
+            .vaultFloatingBarScrollClearance()
         }
         .navigationTitle("Archived Cards")
         .alert("Remove archived card?", isPresented: Binding(
@@ -3262,6 +3293,7 @@ struct AddCardChoiceView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 32)
             }
+            .vaultFloatingBarScrollClearance()
         }
         .navigationTitle("Add Card")
         .navigationBarTitleDisplayMode(.inline)
@@ -3369,6 +3401,7 @@ struct ManualCardEntryView: View {
                 }
                 .padding(20)
             }
+            .vaultFloatingBarScrollClearance()
         }
         .navigationTitle("Review & Save")
         .navigationBarTitleDisplayMode(.inline)
@@ -3515,6 +3548,7 @@ struct ScanCardView: View {
                     }
                     .padding(20)
                 }
+                .vaultFloatingBarScrollClearance()
                 .onChange(of: editorRevision) { _, _ in
                     withAnimation(.snappy) {
                         proxy.scrollTo("scan.detectedDetails", anchor: .center)
@@ -3985,11 +4019,11 @@ struct CardDetailView: View {
                 if let card {
                     detailContent(card)
                     .padding(20)
-                    .padding(.bottom, 72)
                 } else {
                     ContentUnavailableView("Card unavailable", systemImage: "creditcard.trianglebadge.exclamationmark", description: Text("This card may have been deleted."))
                 }
             }
+            .vaultFloatingBarScrollClearance()
         }
         .navigationTitle(card?.displayName ?? "Card")
         .toolbar {
@@ -4543,6 +4577,7 @@ struct AppIconPickerView: View {
                 }
                 .padding(20)
             }
+            .vaultFloatingBarScrollClearance()
         }
         .navigationTitle("App Icon")
         .navigationBarTitleDisplayMode(.inline)
@@ -4645,6 +4680,7 @@ struct SettingsView: View {
                 }
             }
             .scrollContentBackground(.hidden)
+            .vaultFloatingBarScrollClearance()
         }
         .navigationTitle("Settings")
     }

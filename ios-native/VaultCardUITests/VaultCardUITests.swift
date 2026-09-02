@@ -145,6 +145,68 @@ final class VaultCardUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Vault"].waitForExistence(timeout: 5))
     }
 
+    func testSettingsFinalRowClearsFloatingTray() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launch()
+
+        completeOnboardingIfNeeded(app)
+
+        let settings = app.buttons["tray.settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+
+        let version = app.staticTexts["Version"]
+        let versionRow = app.cells.containing(.staticText, identifier: "Version").firstMatch
+        for _ in 0..<6 {
+            if versionRow.isHittable { break }
+            app.swipeUp()
+        }
+
+        XCTAssertTrue(version.exists)
+        XCTAssertTrue(versionRow.exists)
+        XCTAssertTrue(versionRow.isHittable)
+
+        let addButton = app.buttons["cards.add"]
+        XCTAssertTrue(addButton.waitForExistence(timeout: 5))
+        let trayVerticalPadding: CGFloat = 8
+        let intendedContentGap: CGFloat = 12
+        let trayTop = addButton.frame.minY - trayVerticalPadding
+        XCTAssertLessThanOrEqual(
+            versionRow.frame.maxY + intendedContentGap,
+            trayTop + 1,
+            "The final Settings row must remain fully above the floating tray."
+        )
+    }
+
+    func testVaultPrivacyFooterClearsFloatingTray() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards"]
+        app.launch()
+
+        let addButton = app.buttons["cards.add"]
+        XCTAssertTrue(addButton.waitForExistence(timeout: 5))
+        let footer = app.staticTexts["cards.privacy.footer"]
+        let footerRow = app.cells.containing(.staticText, identifier: "cards.privacy.footer").firstMatch
+        let trayVerticalPadding: CGFloat = 8
+        let intendedContentGap: CGFloat = 12
+        let trayTop = addButton.frame.minY - trayVerticalPadding
+
+        for _ in 0..<6 {
+            if footerRow.exists, footerRow.frame.maxY + intendedContentGap <= trayTop + 1 { break }
+            app.swipeUp()
+        }
+
+        XCTAssertTrue(footer.exists)
+        XCTAssertTrue(footerRow.exists)
+        XCTAssertLessThanOrEqual(
+            footerRow.frame.maxY + intendedContentGap,
+            trayTop + 1,
+            "The Vault privacy footer must remain fully above the floating tray."
+        )
+    }
+
     private func completeOnboardingIfNeeded(_ app: XCUIApplication) {
         let primary = app.buttons["onboarding.primary"]
         if primary.waitForExistence(timeout: 3) {

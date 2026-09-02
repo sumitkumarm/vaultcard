@@ -100,6 +100,10 @@ extension View {
             buttonStyle(.borderedProminent)
         }
     }
+
+    func vaultFloatingBarScrollClearance() -> some View {
+        contentMargins(.bottom, VaultFloatingBar.scrollContentClearance, for: .scrollContent)
+    }
 }
 
 struct VaultBrandMark: View {
@@ -239,7 +243,8 @@ struct VaultCardArtwork: View {
 }
 
 struct VaultFloatingBar: View {
-    static let overlayClearance = Layout.barHeight + Layout.bottomPadding + Layout.overlaySpacing
+    static let scrollContentClearance = Layout.barHeight + Layout.bottomPadding + Layout.overlaySpacing
+    static let overlayClearance = scrollContentClearance
 
     private enum Destination {
         case vault
