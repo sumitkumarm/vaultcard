@@ -943,7 +943,6 @@ final class NotificationService: NSObject, NotificationScheduling, UNUserNotific
     }
 
     func syncForCard(_ card: VaultCard, preferences: NotificationPreferences) async {
-        guard preferences.privacyPreservingContent else { return }
         if preferences.lowBalance, let balance = card.balance, balance < 10, card.fetchFailureCount == 0 {
             await addNotification(id: "\(card.id).low", title: "A saved card may need attention", body: "Open VaultCard to review a low balance.")
         }
@@ -2717,6 +2716,7 @@ struct CardListView: View {
         // Keep the full-swipe behavior consistent with the larger card artwork.
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             deleteAction(for: card)
+            refreshAction(for: card)
         }
     }
 
@@ -2894,6 +2894,18 @@ struct CardListView: View {
             Label("Delete", systemImage: "trash")
         }
         .tint(.red)
+    }
+
+    private func refreshAction(for card: VaultCard) -> some View {
+        Button {
+            model.routePath.append(.giftCardMall(card.id))
+        } label: {
+            Label("Refresh", systemImage: "arrow.clockwise")
+        }
+        .tint(VaultTheme.electricBlue)
+        .accessibilityIdentifier("cards.swipe.refresh.\(card.id)")
+        .accessibilityLabel("Refresh \(card.displayName)")
+        .accessibilityHint("Open the balance check for this card")
     }
 }
 
@@ -3219,7 +3231,7 @@ struct CardRow: View {
             VStack(alignment: .trailing, spacing: 3) {
                 Text(card.balance.map { $0.formatted(.currency(code: "USD")) } ?? "—")
                     .font(.subheadline.weight(.semibold))
-                Text(card.lastFetchedAt?.formatted(date: .omitted, time: .shortened) ?? "Never")
+                Text(card.lastFetchedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Never")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -4064,13 +4076,16 @@ struct CardDetailView: View {
 
     private func detailContent(_ card: VaultCard) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            VaultCardArtwork(card: card, revealedCardNumber: revealedCredentials?.cardNumber)
+            VaultCardArtwork(
+                card: card,
+                revealedCredentials: revealedCredentials,
+                usesDetailedMask: true
+            )
             topActions(card)
             Text("Overview")
                 .font(.headline)
             failureBanner(card)
             balancePanel(card)
-            cardDetailsPanel(card)
             transactionPanel(card)
             Label("Secure details never leave your device.", systemImage: "lock.fill")
                 .font(.caption)
@@ -4119,26 +4134,6 @@ struct CardDetailView: View {
         }
     }
 
-    private func cardDetailsPanel(_ card: VaultCard) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Card details").font(.headline)
-            VaultSurface(padding: 0) {
-                VStack(spacing: 0) {
-                    detailRow(
-                        "Card number",
-                        revealedCredentials.map { CardRules.formatCardNumber($0.cardNumber) } ?? CardRules.mask(last4: card.last4)
-                    )
-                    Divider().padding(.leading, 16)
-                    detailRow("Expires", card.expiry)
-                    Divider().padding(.leading, 16)
-                    detailRow("CVV", revealedCredentials?.cvv ?? "•••")
-                    Divider().padding(.leading, 16)
-                    detailRow("Network", card.network.displayName)
-                }
-            }
-        }
-    }
-
     private func topActions(_ card: VaultCard) -> some View {
         VStack(spacing: 8) {
             HStack(spacing: 12) {
@@ -4157,13 +4152,14 @@ struct CardDetailView: View {
                 }
             }
             Label(
-                card.lastFetchedAt.map { "Balance last checked \($0.formatted(date: .abbreviated, time: .shortened))" }
-                    ?? "Balance has not been checked yet",
+                card.lastFetchedAt.map { "Last refreshed \($0.formatted(date: .abbreviated, time: .shortened))" }
+                    ?? "Never refreshed",
                 systemImage: "clock"
             )
             .font(.caption)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .trailing)
+            .accessibilityIdentifier("detail.last-refresh")
         }
     }
 
@@ -4231,17 +4227,6 @@ struct CardDetailView: View {
                 }
             }
         }
-    }
-
-    private func detailRow(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(.secondary)
-            Spacer()
-            Text(value)
-                .font(.subheadline.weight(.medium))
-                .monospacedDigit()
-        }
-        .padding(16)
     }
 
     private func scheduleHide() {
@@ -4648,10 +4633,18 @@ struct SettingsView: View {
                     }
                 }
                 Section("Privacy") {
-                    Toggle(isOn: Binding(get: { model.settings.notificationPreferences.privacyPreservingContent }, set: { value in model.updateSettings { $0.notificationPreferences.privacyPreservingContent = value } })) {
-                        Label("Privacy-preserving content", systemImage: "hand.raised.fill")
+                    HStack(spacing: 12) {
+                        Label("On-device privacy", systemImage: "lock.fill")
+                        Spacer()
+                        Text("Always on")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
                     }
-                    Text("Card data and sensitive details stay on this device.")
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("settings.privacy.onDevice")
+                    .accessibilityLabel("On-device privacy")
+                    .accessibilityValue("Always on")
+                    Text("Card data and sensitive details stay on this device. Privacy protections are always enabled.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

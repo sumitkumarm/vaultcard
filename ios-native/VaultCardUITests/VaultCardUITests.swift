@@ -66,6 +66,8 @@ final class VaultCardUITests: XCTestCase {
         let singleCard = app.buttons["card.row.1111"]
         XCTAssertTrue(singleCard.waitForExistence(timeout: 5))
         singleCard.swipeLeft()
+        let swipeRefresh = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Refresh")).firstMatch
+        XCTAssertTrue(swipeRefresh.waitForExistence(timeout: 5))
         let swipeDelete = app.buttons["Delete"].firstMatch
         XCTAssertTrue(swipeDelete.waitForExistence(timeout: 5))
         swipeDelete.tap()

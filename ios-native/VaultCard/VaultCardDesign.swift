@@ -174,7 +174,8 @@ struct VaultNetworkMark: View {
 struct VaultCardArtwork: View {
     let card: VaultCard
     var compact = false
-    var revealedCardNumber: String? = nil
+    var revealedCredentials: CardCredentials? = nil
+    var usesDetailedMask = false
     var emphasizesEdge = false
 
     private var gradient: [Color] {
@@ -214,9 +215,18 @@ struct VaultCardArtwork: View {
                     VaultNetworkMark(network: card.network)
                 }
                 Spacer(minLength: 0)
-                Text(revealedCardNumber.map(CardRules.formatCardNumber) ?? "••••  \(card.last4)")
+                Text(
+                    revealedCredentials.map { CardRules.formatCardNumber($0.cardNumber) }
+                        ?? (usesDetailedMask ? CardRules.mask(last4: card.last4) : "••••  \(card.last4)")
+                )
                     .font(.system(compact ? .caption : .body, design: .monospaced, weight: .medium))
                 HStack {
+                    if !compact, let revealedCredentials {
+                        HStack(spacing: 14) {
+                            revealedField(label: "EXP", value: revealedCredentials.expiry)
+                            revealedField(label: "CVV", value: revealedCredentials.cvv)
+                        }
+                    }
                     if !compact {
                         Text(card.balance?.formatted(.currency(code: "USD")) ?? "Balance unavailable")
                             .font(.title3.weight(.semibold))
@@ -239,6 +249,19 @@ struct VaultCardArtwork: View {
                 .stroke(.white.opacity(emphasizesEdge ? 0.48 : 0.24), lineWidth: emphasizesEdge ? 1.4 : 1)
         }
         .shadow(color: gradient.first?.opacity(0.2) ?? .clear, radius: 12, y: 6)
+    }
+
+    private func revealedField(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.72))
+            Text(value)
+                .font(.system(.caption, design: .monospaced, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .accessibilityIdentifier("detail.card.\(label.lowercased())")
+        }
     }
 }
 
