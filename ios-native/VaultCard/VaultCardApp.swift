@@ -4105,10 +4105,7 @@ struct CardDetailView: View {
                 usesDetailedMask: true
             )
             topActions(card)
-            Text("Overview")
-                .font(.headline)
             failureBanner(card)
-            balancePanel(card)
             transactionPanel(card)
             Label("Secure details never leave your device.", systemImage: "lock.fill")
                 .font(.caption)
@@ -4141,19 +4138,6 @@ struct CardDetailView: View {
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(VaultTheme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
-        }
-    }
-
-    private func balancePanel(_ card: VaultCard) -> some View {
-        VaultSurface {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("BALANCE")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
-                Text(card.balance.map { $0.formatted(.currency(code: "USD")) } ?? "Unavailable")
-                    .font(.title2.bold())
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
