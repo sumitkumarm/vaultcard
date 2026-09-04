@@ -4500,8 +4500,84 @@ enum VaultAppIcons {
             title: "Card Stack",
             alternateIconName: nil,
             previewAssetName: "VaultCardIconPreview"
+        ),
+        VaultAppIconChoice(
+            id: "blue-wallet",
+            title: "Blue Wallet",
+            alternateIconName: "VaultIconBlueWallet",
+            previewAssetName: "VaultIconBlueWalletPreview"
+        ),
+        VaultAppIconChoice(
+            id: "midnight-shield",
+            title: "Midnight Shield",
+            alternateIconName: "VaultIconMidnightShield",
+            previewAssetName: "VaultIconMidnightShieldPreview"
+        ),
+        VaultAppIconChoice(
+            id: "electric-stack",
+            title: "Electric Stack",
+            alternateIconName: "VaultIconElectricStack",
+            previewAssetName: "VaultIconElectricStackPreview"
+        ),
+        VaultAppIconChoice(
+            id: "sunset-stack",
+            title: "Sunset Stack",
+            alternateIconName: "VaultIconSunsetStack",
+            previewAssetName: "VaultIconSunsetStackPreview"
+        ),
+        VaultAppIconChoice(
+            id: "teal-stack",
+            title: "Teal Stack",
+            alternateIconName: "VaultIconTealStack",
+            previewAssetName: "VaultIconTealStackPreview"
+        ),
+        VaultAppIconChoice(
+            id: "frost-stack",
+            title: "Frost Stack",
+            alternateIconName: "VaultIconFrostStack",
+            previewAssetName: "VaultIconFrostStackPreview"
+        ),
+        VaultAppIconChoice(
+            id: "aurora-stack",
+            title: "Aurora Stack",
+            alternateIconName: "VaultIconAuroraStack",
+            previewAssetName: "VaultIconAuroraStackPreview"
+        ),
+        VaultAppIconChoice(
+            id: "midnight-stack",
+            title: "Midnight Stack",
+            alternateIconName: "VaultIconMidnightStack",
+            previewAssetName: "VaultIconMidnightStackPreview"
+        ),
+        VaultAppIconChoice(
+            id: "aurora-wallet",
+            title: "Aurora Wallet",
+            alternateIconName: "VaultIconAuroraWallet",
+            previewAssetName: "VaultIconAuroraWalletPreview"
+        ),
+        VaultAppIconChoice(
+            id: "teal-wallet",
+            title: "Teal Wallet",
+            alternateIconName: "VaultIconTealWallet",
+            previewAssetName: "VaultIconTealWalletPreview"
+        ),
+        VaultAppIconChoice(
+            id: "pearl-wallet",
+            title: "Pearl Wallet",
+            alternateIconName: "VaultIconPearlWallet",
+            previewAssetName: "VaultIconPearlWalletPreview"
+        ),
+        VaultAppIconChoice(
+            id: "prism-wallet",
+            title: "Prism Wallet",
+            alternateIconName: "VaultIconPrismWallet",
+            previewAssetName: "VaultIconPrismWalletPreview"
         )
     ]
+
+    static func choice(for alternateIconName: String?) -> VaultAppIconChoice {
+        choices.first { $0.alternateIconName == alternateIconName } ?? choices[0]
+    }
 }
 
 struct AppIconPickerView: View {
@@ -4516,7 +4592,7 @@ struct AppIconPickerView: View {
             VaultBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text("Choose the icon VaultCard uses on your Home Screen. Additional installed designs will appear here as they’re added to the app.")
+                    Text("Choose the icon VaultCard uses on your Home Screen.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
 
@@ -4546,12 +4622,6 @@ struct AppIconPickerView: View {
                             .accessibilityLabel("\(choice.title) app icon")
                             .accessibilityValue(selectedIconName == choice.alternateIconName ? "Selected" : "Available")
                         }
-                    }
-
-                    if VaultAppIcons.choices.count == 1 {
-                        Label("More icon choices can be added without changing this screen.", systemImage: "square.grid.2x2")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
 
                     if let errorMessage {
@@ -4587,9 +4657,11 @@ struct AppIconPickerView: View {
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
+    @State private var selectedAppIconName = UIApplication.shared.alternateIconName
 
     var body: some View {
         @Bindable var model = model
+        let selectedAppIcon = VaultAppIcons.choice(for: selectedAppIconName)
         ZStack {
             VaultBackground()
             Form {
@@ -4653,14 +4725,14 @@ struct SettingsView: View {
                         AppIconPickerView()
                     } label: {
                         HStack(spacing: 12) {
-                            Image("VaultCardIconPreview")
+                            Image(selectedAppIcon.previewAssetName)
                                 .resizable()
                                 .scaledToFit()
                                 .frame(width: 42, height: 42)
                                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("App Icon")
-                                Text("Card Stack")
+                                Text(selectedAppIcon.title)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -4676,6 +4748,9 @@ struct SettingsView: View {
             .vaultFloatingBarScrollClearance()
         }
         .navigationTitle("Settings")
+        .onAppear {
+            selectedAppIconName = UIApplication.shared.alternateIconName
+        }
     }
 }
 
