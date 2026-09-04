@@ -1879,6 +1879,12 @@ final class AppModel {
         return false
     }
 
+    var isShowingActivity: Bool {
+        guard let first = routePath.first else { return false }
+        if case .activity = first { return true }
+        return false
+    }
+
     var isShowingAddFlow: Bool {
         guard let first = routePath.first else { return false }
         switch first {
@@ -1949,6 +1955,11 @@ final class AppModel {
     func showArchivedCards() {
         guard routePath.last != .archived else { return }
         routePath = [.archived]
+    }
+
+    func showActivity() {
+        guard routePath.last != .activity else { return }
+        routePath = [.activity]
     }
 
     func revealCardNumber(id: String) async throws -> String {
@@ -2032,6 +2043,7 @@ enum Route: Hashable {
     case detail(String)
     case giftCardMall(String)
     case archived
+    case activity
     case settings
 }
 
@@ -2124,6 +2136,7 @@ struct RootView: View {
                             case .detail(let id): CardDetailView(cardID: id)
                             case .giftCardMall(let id): GiftCardMallRefreshView(cardID: id)
                             case .archived: ArchivedCardsView()
+                            case .activity: ActivityView()
                             case .settings: SettingsView()
                             }
                         }
@@ -2156,7 +2169,7 @@ struct RootView: View {
 
     private var floatingBar: some View {
         VaultFloatingBar(
-            vaultSelected: model.isShowingVault || model.isShowingArchived,
+            vaultSelected: model.isShowingVault || model.isShowingArchived || model.isShowingActivity,
             addSelected: model.isShowingAddFlow,
             settingsSelected: model.isShowingSettings,
             showVault: { withAnimation(.snappy) { model.showVault() } },
@@ -2385,6 +2398,16 @@ struct CardListView: View {
                     .accessibilityLabel("Archived cards")
                     .accessibilityValue("\(model.archivedCards.count) cards")
                     .accessibilityHint("Open archived cards")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        model.showActivity()
+                    } label: {
+                        Image(systemName: "clock.arrow.circlepath")
+                    }
+                    .accessibilityIdentifier("cards.activity")
+                    .accessibilityLabel("Activity")
+                    .accessibilityHint("Show transactions across all cards")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
