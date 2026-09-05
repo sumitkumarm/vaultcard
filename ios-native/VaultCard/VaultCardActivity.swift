@@ -32,7 +32,6 @@ private struct ActivityFilterConfiguration {
     var activeControlCount: Int {
         (dateRange == .all ? 0 : 1)
             + (selectedCardIDs.isEmpty ? 0 : 1)
-            + (sort == .newest ? 0 : 1)
     }
 }
 
@@ -69,6 +68,7 @@ private struct ActivityEntry: Identifiable {
 struct ActivityView: View {
     @Environment(AppModel.self) private var model
     @State private var searchText = ""
+    @FocusState private var searchFocused: Bool
     @State private var filters = ActivityFilterConfiguration()
     @State private var filterPresentation: ActivityFilterPresentation?
 
@@ -139,74 +139,50 @@ struct ActivityView: View {
         let entries = allEntries
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let filteredEntries = entries.isEmpty ? [] : visibleEntries(from: entries, query: query)
-        let refined = filters.hasFilters || !query.isEmpty
 
         ZStack {
             VaultBackground()
-            List {
-                if entries.isEmpty {
-                    emptyActivity
-                } else {
-                    if refined {
-                        filteredSummary(total: filteredEntries.reduce(0) { $0 + $1.amount }, count: filteredEntries.count)
-                    }
-
-                    if filteredEntries.isEmpty {
-                        noResults
+            VStack(spacing: 0) {
+                searchControls
+                List {
+                    if entries.isEmpty {
+                        emptyActivity
                     } else {
-                        Section {
-                            ForEach(filteredEntries) { entry in
-                                Button {
-                                    model.routePath.append(.detail(entry.cardID))
-                                } label: {
-                                    ActivityTransactionRow(entry: entry)
+                        filteredSummary(total: filteredEntries.reduce(0) { $0 + $1.amount }, count: filteredEntries.count)
+
+                        if filteredEntries.isEmpty {
+                            noResults
+                        } else {
+                            Section {
+                                ForEach(filteredEntries) { entry in
+                                    Button {
+                                        model.routePath.append(.detail(entry.cardID))
+                                    } label: {
+                                        ActivityTransactionRow(entry: entry)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(Color.clear)
+                                    .accessibilityIdentifier("activity.transaction.\(entry.id)")
+                                    .accessibilityHint("Open \(entry.cardName)")
                                 }
-                                .buttonStyle(.plain)
-                                .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
-                                .accessibilityIdentifier("activity.transaction.\(entry.id)")
-                                .accessibilityHint("Open \(entry.cardName)")
+                            } header: {
+                                Text("\(filteredEntries.count) transaction\(filteredEntries.count == 1 ? "" : "s")")
+                                    .textCase(nil)
                             }
-                        } header: {
-                            Text("\(filteredEntries.count) transaction\(filteredEntries.count == 1 ? "" : "s")")
-                                .textCase(nil)
                         }
                     }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .environment(\.defaultMinListRowHeight, 1)
+                .vaultFloatingBarScrollClearance()
+                .scrollDismissesKeyboard(.interactively)
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 1)
-            .vaultFloatingBarScrollClearance()
         }
         .navigationTitle("Activity")
         .navigationBarTitleDisplayMode(.large)
-        .searchable(text: $searchText, prompt: "Search merchants or cards")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    filterPresentation = ActivityFilterPresentation(configuration: filters)
-                } label: {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "line.3.horizontal.decrease")
-                        if filters.activeControlCount > 0 {
-                            Circle()
-                                .fill(VaultTheme.electricBlue)
-                                .frame(width: 8, height: 8)
-                                .offset(x: 5, y: -4)
-                        }
-                    }
-                }
-                .accessibilityIdentifier("activity.filters")
-                .accessibilityLabel("Sort and filter")
-                .accessibilityValue(
-                    filters.activeControlCount == 0
-                        ? "Default"
-                        : "\(filters.activeControlCount) option\(filters.activeControlCount == 1 ? "" : "s") changed"
-                )
-            }
-        }
         .sheet(item: $filterPresentation) { presentation in
             ActivityFilterSheet(
                 cards: model.cards,
@@ -215,28 +191,161 @@ struct ActivityView: View {
                 filters = updatedFilters
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("activity.screen")
     }
 
-    private func filteredSummary(total: Double, count: Int) -> some View {
-        HStack(spacing: 20) {
-            summaryMetric(
-                title: "Net amount",
-                value: total.formatted(.currency(code: "USD"))
-            )
-            Divider()
-                .frame(height: 36)
-            summaryMetric(
-                title: "Transactions",
-                value: count.formatted()
-            )
+    private var hasChanges: Bool {
+        !searchText.isEmpty || filters.hasFilters || filters.sort != .newest
+    }
+
+    private func resetAll() {
+        searchText = ""
+        filters = ActivityFilterConfiguration()
+        searchFocused = false
+    }
+
+    private var searchControls: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search merchants, cards, or last 4", text: $searchText)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.search)
+                    .focused($searchFocused)
+                    .onSubmit { searchFocused = false }
+                    .accessibilityIdentifier("activity.search")
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Clear search")
+                    .accessibilityIdentifier("activity.search.clear")
+                }
+            }
+            .padding(.leading, 12)
+            .padding(.trailing, 4)
+            .frame(minHeight: 48)
+            .vaultGlass(cornerRadius: 14)
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    filterButton
+                    Spacer(minLength: 0)
+                    sortMenu
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    filterButton
+                    sortMenu
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if hasChanges {
+                HStack {
+                    Text(filters.hasFilters || !searchText.isEmpty ? "Filtered activity" : "All activity")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Reset all", action: resetAll)
+                        .font(.subheadline.weight(.semibold))
+                        .frame(minHeight: 44)
+                        .accessibilityIdentifier("activity.reset")
+                }
+            }
         }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 4)
+    }
+
+    private var filterButton: some View {
+        Button {
+            searchFocused = false
+            filterPresentation = ActivityFilterPresentation(configuration: filters)
+        } label: {
+            Label(filters.activeControlCount == 0 ? "Filters" : "Filters (\(filters.activeControlCount))",
+                  systemImage: "line.3.horizontal.decrease")
+                .font(.subheadline.weight(.semibold))
+                .frame(minHeight: 44)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .accessibilityIdentifier("activity.filters")
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            Picker("Sort activity", selection: $filters.sort) {
+                ForEach(ActivitySortOption.allCases) { option in
+                    Text(option.rawValue).tag(option)
+                }
+            }
+        } label: {
+            Label("Sort: \(filters.sort.rawValue)", systemImage: "arrow.up.arrow.down")
+                .font(.subheadline)
+                .frame(minHeight: 44)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .accessibilityIdentifier("activity.sort")
+    }
+
+    private var dateScope: String {
+        guard filters.dateRange == .custom else { return filters.dateRange.rawValue }
+        let start = min(filters.startDate, filters.endDate).formatted(date: .abbreviated, time: .omitted)
+        let end = max(filters.startDate, filters.endDate).formatted(date: .abbreviated, time: .omitted)
+        return "\(start) – \(end)"
+    }
+
+    private func scopeChip(_ title: String, id: String, remove: @escaping () -> Void) -> some View {
+        Button(action: remove) {
+            HStack(spacing: 8) {
+                Text(title).multilineTextAlignment(.leading)
+                Image(systemName: "xmark.circle.fill")
+            }
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 12)
+            .frame(minHeight: 44)
+            .background(VaultTheme.electricBlue.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Remove \(title)")
+        .accessibilityIdentifier(id)
+    }
+
+    private func filteredSummary(total: Double, count: Int) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("\(filters.selectedCardIDs.isEmpty ? "All cards" : "Selected cards") • \(dateScope)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("activity.scope")
+            if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                scopeChip("Search: “\(searchText)”", id: "activity.filter.remove.search") { searchText = "" }
+            }
+            if filters.dateRange != .all {
+                scopeChip(dateScope, id: "activity.filter.remove.date") { filters.dateRange = .all }
+            }
+            ForEach(model.cards.filter { filters.selectedCardIDs.contains($0.id) }) { card in
+                scopeChip("\(card.displayName) •••• \(card.last4)", id: "activity.filter.remove.card.\(card.id)") {
+                    filters.selectedCardIDs.remove(card.id)
+                }
+            }
+            HStack(spacing: 20) {
+                summaryMetric(title: "Net amount", value: total.formatted(.currency(code: "USD")))
+                Divider().frame(height: 36)
+                summaryMetric(title: "Transactions", value: count.formatted())
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .vaultGlass(cornerRadius: 18)
         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("activity.summary")
     }
 
@@ -271,8 +380,7 @@ struct ActivityView: View {
             Text("Try another merchant, card, or filter.")
         } actions: {
             Button("Clear search and filters") {
-                searchText = ""
-                filters = ActivityFilterConfiguration()
+                resetAll()
             }
             .vaultPrimaryButton()
         }
@@ -347,16 +455,6 @@ private struct ActivityFilterSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Sort by") {
-                    Picker("Order", selection: $configuration.sort) {
-                        ForEach(ActivitySortOption.allCases) { option in
-                            Text(option.rawValue).tag(option)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
-                }
-
                 Section("Date range") {
                     Picker("Range", selection: $configuration.dateRange) {
                         ForEach(ActivityDateRange.allCases) { range in
@@ -398,14 +496,16 @@ private struct ActivityFilterSheet: View {
                 }
 
                 Section {
-                    Button("Reset sort and filters") {
+                    Button("Reset filters") {
+                        let sort = configuration.sort
                         configuration = ActivityFilterConfiguration()
+                        configuration.sort = sort
                     }
                     .frame(maxWidth: .infinity)
                     .accessibilityIdentifier("activity.filters.reset")
                 }
             }
-            .navigationTitle("Sort & Filter")
+            .navigationTitle("Filters")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -421,7 +521,7 @@ private struct ActivityFilterSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
     }
 

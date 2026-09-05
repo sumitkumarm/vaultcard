@@ -201,6 +201,56 @@ final class VaultCardUITests: XCTestCase {
         )
     }
 
+    func testActivitySearchFiltersAndSort() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-seed-activity"]
+        app.launch()
+        app.buttons["cards.activity"].tap()
+
+        let search = app.textFields["activity.search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        XCTAssertTrue(search.isHittable)
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "activity.transaction."))
+        XCTAssertEqual(rows.count, 3)
+        search.tap()
+        search.typeText("coffee\n")
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertTrue(rows.element(boundBy: 0).label.contains("Corner Coffee"))
+        app.buttons["activity.search.clear"].tap()
+        XCTAssertEqual(rows.count, 3)
+
+        app.buttons["activity.sort"].tap()
+        app.buttons["Highest amount"].tap()
+        XCTAssertTrue(rows.element(boundBy: 0).label.contains("Book Shop"))
+        XCTAssertTrue(app.buttons["activity.sort"].label.contains("Highest amount"))
+
+        app.buttons["activity.filters"].tap()
+        let card = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "activity.filter.card.", "Test Aurora")).firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 3))
+        let cardID = String(card.identifier.dropFirst("activity.filter.card.".count))
+        card.tap()
+        app.buttons["activity.filters.apply"].tap()
+        XCTAssertEqual(rows.count, 1)
+        let chip = app.buttons["activity.filter.remove.card." + cardID]
+        XCTAssertTrue(chip.exists)
+        XCTAssertTrue(chip.label.contains("1111"))
+        chip.tap()
+        XCTAssertEqual(rows.count, 3)
+
+        search.tap()
+        search.typeText("no such merchant\n")
+        XCTAssertEqual(rows.count, 0)
+        XCTAssertTrue(app.buttons["activity.reset"].isHittable)
+        app.buttons["activity.reset"].tap()
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertTrue(app.buttons["activity.sort"].label.contains("Newest first"))
+        XCTAssertTrue(rows.element(boundBy: 0).label.contains("Corner Coffee"))
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Activity redesigned"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     private func completeOnboardingIfNeeded(_ app: XCUIApplication) {
         let primary = app.buttons["onboarding.primary"]
         if primary.waitForExistence(timeout: 3) {

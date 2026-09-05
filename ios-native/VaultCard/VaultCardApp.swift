@@ -1565,7 +1565,20 @@ struct AppEnvironment {
                 CardInput(cardNumber: "4012888888881881", expiry: "09/29", cvv: "123", nickname: "Test Atlas"),
                 CardInput(cardNumber: "5555555555554444", expiry: "09/29", cvv: "123", nickname: "Test Nova")
             ] {
-                _ = try cardRepository.addCard(input)
+                let cardID = try cardRepository.addCard(input)
+                if ProcessInfo.processInfo.arguments.contains("--ui-testing-seed-activity") {
+                    let index = input.nickname == "Test Aurora" ? 0 : (input.nickname == "Test Atlas" ? 1 : 2)
+                    let descriptions = ["Corner Coffee", "Market Groceries", "Book Shop"]
+                    let transaction = CardTransaction(
+                        date: Calendar.current.date(byAdding: .day, value: -(index + 1), to: Date())!,
+                        description: descriptions[index],
+                        amount: Double((index + 1) * 10)
+                    )
+                    try cardRepository.applyBalanceResult(
+                        cardID: cardID,
+                        result: BalanceResult(balance: 100, transactions: [transaction], fetchedAt: Date())
+                    )
+                }
             }
         }
         return AppEnvironment(
@@ -2202,7 +2215,8 @@ struct CardListView: View {
                     Button {
                         model.showActivity()
                     } label: {
-                        Image(systemName: "clock.arrow.circlepath")
+                        Label("Activity", systemImage: "clock.arrow.circlepath")
+                            .labelStyle(.titleAndIcon)
                     }
                     .accessibilityIdentifier("cards.activity")
                     .accessibilityLabel("Activity")
