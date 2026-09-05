@@ -1,18 +1,6 @@
 import XCTest
 
 final class VaultCardUITests: XCTestCase {
-    func testAppLaunchesToOnboardingOrVault() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing"]
-        app.launch()
-        XCTAssertTrue(
-            app.staticTexts["VaultCard"].exists
-                || app.staticTexts["Track every gift card in one place"].exists
-                || app.buttons["Get Started"].exists
-                || app.buttons["Next"].exists
-        )
-    }
-
     func testManualCardLifecycleHappyPath() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
@@ -36,11 +24,17 @@ final class VaultCardUITests: XCTestCase {
         expiry.tap()
         expiry.typeText("0929")
 
+        // Keep the swipe above the keyboard and floating tray so it scrolls the form.
+        let form = app.scrollViews.firstMatch
+        let scrollStart = form.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.45))
+        let scrollEnd = form.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.2))
         let cvv = app.secureTextFields["manual.cvv"]
+        scrollStart.press(forDuration: 0.05, thenDragTo: scrollEnd)
         cvv.tap()
         cvv.typeText("123")
 
         let nickname = app.textFields["manual.nickname"]
+        scrollStart.press(forDuration: 0.05, thenDragTo: scrollEnd)
         nickname.tap()
         nickname.typeText("Groceries")
 
@@ -66,8 +60,6 @@ final class VaultCardUITests: XCTestCase {
         let singleCard = app.buttons["card.row.1111"]
         XCTAssertTrue(singleCard.waitForExistence(timeout: 5))
         singleCard.swipeLeft()
-        let swipeRefresh = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Refresh")).firstMatch
-        XCTAssertTrue(swipeRefresh.waitForExistence(timeout: 5))
         let swipeDelete = app.buttons["Delete"].firstMatch
         XCTAssertTrue(swipeDelete.waitForExistence(timeout: 5))
         swipeDelete.tap()

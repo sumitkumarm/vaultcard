@@ -17,10 +17,6 @@ enum VaultTheme {
         scheme == .dark ? Color.white.opacity(0.075) : Color.white.opacity(0.92)
     }
 
-    static func elevatedSurface(for scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color(red: 0.035, green: 0.14, blue: 0.26) : Color.white
-    }
-
     static func border(for scheme: ColorScheme) -> Color {
         scheme == .dark ? Color.cyan.opacity(0.18) : electricBlue.opacity(0.14)
     }

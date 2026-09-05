@@ -207,27 +207,6 @@ struct BalanceResult: Equatable {
     var fetchedAt: Date
 }
 
-enum RefreshFailureReason: String, Equatable {
-    case network
-    case parseError
-    case rateLimited
-    case offline
-    case botProtection
-    case credentialUnavailable
-    case unknown
-}
-
-struct RefreshFailure: Equatable {
-    var reason: RefreshFailureReason
-    var message: String
-}
-
-enum RefreshOutcome: Equatable {
-    case success(BalanceResult)
-    case failure(RefreshFailure)
-    case cooldown(Date)
-}
-
 struct ScanCandidate: Codable, Hashable {
     var cardNumber: String?
     var expiry: String?
@@ -527,6 +506,7 @@ protocol CredentialStore {
     func delete(cardID: String) throws
 }
 
+@MainActor
 protocol CardRepository {
     func getCards() throws -> [VaultCard]
     func getCard(id: String) throws -> VaultCard?
@@ -540,8 +520,6 @@ protocol CardRepository {
     func updateCredentials(cardID: String, credentials: CardCredentials) throws
     func getCredentials(cardID: String) throws -> CardCredentials
     func applyBalanceResult(cardID: String, result: BalanceResult) throws
-    func markRefreshFailure(cardID: String) throws
-    func updateRefreshCooldown(cardID: String, until: Date) throws
 }
 
 protocol SettingsRepository {
@@ -551,10 +529,6 @@ protocol SettingsRepository {
 
 protocol BiometricAuthenticating {
     func authenticate(reason: String) async -> Bool
-}
-
-protocol BalanceRefreshing {
-    func refreshCard(_ cardID: String, ignoreCooldown: Bool, preferences: NotificationPreferences) async -> RefreshOutcome
 }
 
 enum ScanRecognitionMode {
@@ -820,22 +794,11 @@ final class SwiftDataCardRepository: CardRepository {
         try context.save()
     }
 
-    func markRefreshFailure(cardID: String) throws {
-        guard let record = try findRecord(id: cardID) else { throw VaultError.cardNotFound }
-        record.fetchFailureCount += 1
-        try context.save()
-    }
-
-    func updateRefreshCooldown(cardID: String, until: Date) throws {
-        guard let record = try findRecord(id: cardID) else { throw VaultError.cardNotFound }
-        record.refreshBlockedUntil = until
-        try context.save()
-    }
-
     private func findRecord(id: String) throws -> SchemaV2.CardMetadataRecord? {
-        let descriptor = FetchDescriptor<SchemaV2.CardMetadataRecord>(
+        var descriptor = FetchDescriptor<SchemaV2.CardMetadataRecord>(
             predicate: #Predicate { $0.id == id }
         )
+        descriptor.fetchLimit = 1
         return try context.fetch(descriptor).first
     }
 
@@ -983,164 +946,6 @@ final class NotificationService: NSObject, NotificationScheduling, UNUserNotific
     }
 }
 
-struct ParserConfig: Codable {
-    struct FormFields: Codable {
-        var cardNumber: String
-        var expiryMonth: String
-        var expiryYear: String
-        var cvv: String
-        var pin: String
-    }
-
-    struct TransactionFields: Codable {
-        var date: String
-        var description: String
-        var amount: String
-    }
-
-    var version: Int
-    var endpointUrl: URL
-    var formFields: FormFields
-    var balanceSelector: String
-    var transactionSelector: String
-    var transactionFields: TransactionFields
-
-    static func bundled() -> ParserConfig {
-        if let url = Bundle.main.url(forResource: "ParserConfig", withExtension: "json"),
-           let data = try? Data(contentsOf: url),
-           let config = try? JSONDecoder().decode(ParserConfig.self, from: data) {
-            return config
-        }
-        return ParserConfig(
-            version: 1,
-            endpointUrl: URL(string: "https://mygift.giftcardmall.com")!,
-            formFields: FormFields(cardNumber: "cardNumber", expiryMonth: "expMonth", expiryYear: "expYear", cvv: "cvv", pin: "pin"),
-            balanceSelector: ".balance-amount",
-            transactionSelector: "table.transactions tbody tr",
-            transactionFields: TransactionFields(date: ".date", description: ".description", amount: ".amount")
-        )
-    }
-}
-
-enum HtmlBalanceParser {
-    static func parse(_ body: String, config: ParserConfig, fetchedAt: Date = Date()) throws -> BalanceResult {
-        let balance = try parseBalance(body, selector: config.balanceSelector)
-        return BalanceResult(balance: balance, transactions: parseTransactions(body), fetchedAt: fetchedAt)
-    }
-
-    private static func parseBalance(_ body: String, selector: String) throws -> Double {
-        let candidates = [
-            #"<[^>]*class=["'][^"']*balance-amount[^"']*["'][^>]*>([^<]+)</[^>]+>"#,
-            #""closingBalance"\s*:\s*([0-9]+(?:\.[0-9]+)?)"#,
-            #"\$\s*([0-9]+(?:\.[0-9]{2})?)"#
-        ]
-        for pattern in candidates {
-            if let raw = body.firstMatch(pattern, group: 1) {
-                let normalized = raw.replacingOccurrences(of: "$", with: "").replacingOccurrences(of: ",", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if let value = Double(normalized), value >= 0 {
-                    return value
-                }
-            }
-        }
-        throw VaultError.refresh("Unable to parse balance response.")
-    }
-
-    private static func parseTransactions(_ body: String) -> [CardTransaction] {
-        let rowPattern = #"<tr[^>]*>(.*?)</tr>"#
-        return body.allMatches(rowPattern).compactMap { row in
-            let cells = row.allMatches(#"<t[dh][^>]*>(.*?)</t[dh]>"#).map { $0.strippingHTML.trimmingCharacters(in: .whitespacesAndNewlines) }
-            guard cells.count >= 3 else { return nil }
-            let date = DateFormatter.yyyyMMdd.date(from: cells[0]) ?? Date()
-            let amount = Double(cells[2].replacingOccurrences(of: "$", with: "").replacingOccurrences(of: ",", with: "")) ?? 0
-            return CardTransaction(date: date, description: cells[1], amount: amount)
-        }
-    }
-}
-
-final class GiftCardMallDirectClient {
-    func fetchBalance(config: ParserConfig, credentials: CardCredentials) async throws -> String {
-        var request = URLRequest(url: config.endpointUrl)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 10
-        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
-        request.httpBody = [
-            config.formFields.cardNumber: credentials.cardNumber,
-            config.formFields.expiryMonth: credentials.expiryMonth,
-            config.formFields.expiryYear: credentials.expiryYear,
-            config.formFields.cvv: credentials.cvv,
-            config.formFields.pin: credentials.pin
-        ].formURLEncoded().data(using: .utf8)
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let body = String(data: data, encoding: .utf8) ?? ""
-        if Self.looksLikeBotProtection(response: response, body: body) {
-            throw VaultError.refresh("GiftCardMall is blocking automated balance checks right now.")
-        }
-        guard let http = response as? HTTPURLResponse, http.statusCode < 400 else {
-            throw VaultError.refresh("Unexpected response from GiftCardMall.")
-        }
-        return body
-    }
-
-    static func looksLikeBotProtection(response: URLResponse, body: String) -> Bool {
-        let normalized = body.lowercased()
-        let status = (response as? HTTPURLResponse)?.statusCode
-        return normalized.contains("captcha-delivery.com")
-            || normalized.contains("please enable js and disable any ad blocker")
-            || (status == 405 && normalized.contains("datadome"))
-    }
-}
-
-final class BalanceService: BalanceRefreshing {
-    private let repository: CardRepository
-    private let notifications: NotificationScheduling
-    private let directClient: GiftCardMallDirectClient
-
-    init(repository: CardRepository, notifications: NotificationScheduling, directClient: GiftCardMallDirectClient = GiftCardMallDirectClient()) {
-        self.repository = repository
-        self.notifications = notifications
-        self.directClient = directClient
-    }
-
-    func refreshCard(_ cardID: String, ignoreCooldown: Bool, preferences: NotificationPreferences) async -> RefreshOutcome {
-        do {
-            guard let card = try repository.getCard(id: cardID) else {
-                return .failure(RefreshFailure(reason: .unknown, message: "Card not found."))
-            }
-            if !ignoreCooldown, let until = card.refreshBlockedUntil, until > Date() {
-                return .cooldown(until)
-            }
-            let credentials = try repository.getCredentials(cardID: cardID)
-            let config = ParserConfig.bundled()
-            let body = try await directClient.fetchBalance(config: config, credentials: credentials)
-            let result = try HtmlBalanceParser.parse(body, config: config)
-            try repository.applyBalanceResult(cardID: cardID, result: result)
-            if let updated = try repository.getCard(id: cardID) {
-                await notifications.syncForCard(updated, preferences: preferences)
-            }
-            return .success(result)
-        } catch VaultError.credentialUnavailable {
-            return .failure(RefreshFailure(reason: .credentialUnavailable, message: VaultError.credentialUnavailable.localizedDescription))
-        } catch {
-            try? repository.markRefreshFailure(cardID: cardID)
-            return .failure(RefreshFailure(reason: .network, message: error.localizedDescription))
-        }
-    }
-}
-
-extension Dictionary where Key == String, Value == String {
-    func formURLEncoded() -> String {
-        map { key, value in
-            "\(key.urlEncoded)=\(value.urlEncoded)"
-        }.joined(separator: "&")
-    }
-}
-
-extension String {
-    var urlEncoded: String {
-        addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? self
-    }
-}
-
 struct GiftCardMallSummaryCapture: Equatable {
     var balance: Double
     var currencyCode: String
@@ -1225,22 +1030,27 @@ enum GiftCardMallBridge {
             }
           };
 
+          const isCardResponse = url => typeof url === 'string' && (
+            url.includes('/api/card/getCardBalanceSummary') || url.includes('/api/card/getCardTransactions')
+          );
           const originalFetch = window.fetch;
           window.fetch = async (...args) => {
             const response = await originalFetch(...args);
-            try {
-              const clone = response.clone();
-              const text = await clone.text();
-              const request = args[1] || {};
-              post({
-                kind: 'networkCapture',
-                url: typeof args[0] === 'string' ? args[0] : ((args[0] && args[0].url) || ''),
-                method: request.method || 'GET',
-                requestBody: request.body || null,
-                responseBody: text,
-                status: response.status
-              });
-            } catch (_) {}
+            const url = typeof args[0] === 'string' ? args[0] : ((args[0] && args[0].url) || String(args[0] || ''));
+            if (isCardResponse(url)) {
+              try {
+                const request = args[1] || {};
+                // Observe only card responses, without delaying the site's own fetch.
+                response.clone().text().then(text => post({
+                  kind: 'networkCapture',
+                  url,
+                  method: request.method || (args[0] && args[0].method) || 'GET',
+                  requestBody: typeof request.body === 'string' ? request.body : null,
+                  responseBody: text,
+                  status: response.status
+                })).catch(() => {});
+              } catch (_) {}
+            }
             return response;
           };
 
@@ -1254,6 +1064,7 @@ enum GiftCardMallBridge {
           XMLHttpRequest.prototype.send = function(body) {
             this.__vaultCardBody = body || null;
             this.addEventListener('load', () => {
+              if (!isCardResponse(this.__vaultCardURL)) { return; }
               try {
                 post({
                   kind: 'networkCapture',
@@ -1268,9 +1079,15 @@ enum GiftCardMallBridge {
             return originalSend.apply(this, arguments);
           };
 
+          let inspectionPending = false;
           const observer = new MutationObserver(() => {
-            if (autoScrollEnabled) { window.__vaultCardScrollToForm(); }
-            inspectBalance();
+            if (inspectionPending) { return; }
+            inspectionPending = true;
+            requestAnimationFrame(() => {
+              inspectionPending = false;
+              if (autoScrollEnabled) { window.__vaultCardScrollToForm(); }
+              inspectBalance();
+            });
           });
           observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
           [100, 450, 1200, 2500].forEach(delay => setTimeout(() => {
@@ -1480,19 +1297,14 @@ enum GiftCardMallBridge {
         if let raw = Double(trimmed), trimmed.allSatisfy({ $0.isNumber || $0 == "." || $0 == "-" }) {
             return Date(timeIntervalSince1970: abs(raw) > 10_000_000_000 ? raw / 1_000 : raw)
         }
-        if let date = ISO8601DateFormatter().date(from: trimmed) { return date }
+        if let date = DateFormatter.giftCardISO8601.date(from: trimmed) { return date }
         if let date = DateFormatter.giftCardISO8601Fractional.date(from: trimmed) { return date }
         return DateFormatter.giftCardTransactionDates.lazy.compactMap { $0.date(from: trimmed) }.first
     }
 }
 
 extension DateFormatter {
-    static let yyyyMMdd: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter
-    }()
+    static let giftCardISO8601 = ISO8601DateFormatter()
 
     static let giftCardISO8601Fractional: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -1714,11 +1526,7 @@ extension String {
         }
     }
 
-    var strippingHTML: String {
-        replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: "&nbsp;", with: " ")
-            .replacingOccurrences(of: "&amp;", with: "&")
-    }
+
 }
 
 @MainActor
@@ -1728,10 +1536,6 @@ struct AppEnvironment {
     var biometricService: BiometricAuthenticating
     var notificationService: NotificationScheduling
     var scanner: CardScanning
-
-    static func live() throws -> AppEnvironment {
-        live(container: try ModelContainerFactory.makePersistent())
-    }
 
     static func live(container: ModelContainer) -> AppEnvironment {
         let context = ModelContext(container)
@@ -1785,8 +1589,16 @@ final class InMemorySettingsRepository: SettingsRepository {
 @Observable
 final class AppModel {
     private let environment: AppEnvironment
-    var settings: AppSettings
-    var cards: [VaultCard] = []
+    var settings: AppSettings {
+        didSet {
+            if settings.sortOption != oldValue.sortOption { updateCardLists() }
+        }
+    }
+    var cards: [VaultCard] = [] {
+        didSet { updateCardLists() }
+    }
+    private(set) var sortedActiveCards: [VaultCard] = []
+    private(set) var sortedArchivedCards: [VaultCard] = []
     var routePath: [Route] = []
     var isLocked = false
     var isAuthenticating = false
@@ -1798,24 +1610,18 @@ final class AppModel {
         settings = environment.settingsRepository.load()
     }
 
-    var sortedCards: [VaultCard] {
-        sortedActiveCards
-    }
-
-    var activeCards: [VaultCard] {
-        cards.filter { !$0.isArchived }
-    }
-
-    var archivedCards: [VaultCard] {
-        cards.filter(\.isArchived)
-    }
-
-    var sortedActiveCards: [VaultCard] {
-        CardRules.sorted(activeCards, by: settings.sortOption)
-    }
-
-    var sortedArchivedCards: [VaultCard] {
-        CardRules.sorted(archivedCards, by: settings.sortOption)
+    private func updateCardLists() {
+        var active: [VaultCard] = []
+        var archived: [VaultCard] = []
+        for card in cards {
+            if card.isArchived {
+                archived.append(card)
+            } else {
+                active.append(card)
+            }
+        }
+        sortedActiveCards = CardRules.sorted(active, by: settings.sortOption)
+        sortedArchivedCards = CardRules.sorted(archived, by: settings.sortOption)
     }
 
     func start() async {
@@ -1962,10 +1768,6 @@ final class AppModel {
         routePath = [.activity]
     }
 
-    func revealCardNumber(id: String) async throws -> String {
-        try await revealCardCredentials(id: id).cardNumber
-    }
-
     func revealCardCredentials(id: String) async throws -> CardCredentials {
         isAuthenticating = true
         defer { isAuthenticating = false }
@@ -1989,10 +1791,6 @@ final class AppModel {
         } catch {
             alertMessage = error.localizedDescription
         }
-    }
-
-    func scanText(_ text: String) -> ScanCandidate {
-        environment.scanner.extractCandidates(from: text)
     }
 
     func scanImage(_ image: CGImage, mode: ScanRecognitionMode) async throws -> ScanCandidate {
@@ -2347,11 +2145,11 @@ struct CardListView: View {
         let filtered: [VaultCard]
         switch selectedFilter {
         case .all:
-            filtered = model.sortedCards
+            filtered = model.sortedActiveCards
         case .upToDate:
-            filtered = model.sortedCards.filter { $0.balanceFreshness() == .upToDate }
+            filtered = model.sortedActiveCards.filter { $0.balanceFreshness() == .upToDate }
         case .needsRefresh:
-            filtered = model.sortedCards.filter { $0.balanceFreshness() == .needsRefresh }
+            filtered = model.sortedActiveCards.filter { $0.balanceFreshness() == .needsRefresh }
         }
         guard !searchText.isEmpty else { return filtered }
         return filtered.filter {
@@ -2362,6 +2160,7 @@ struct CardListView: View {
     }
 
     var body: some View {
+        let visibleCards = visibleCards
         ZStack {
             VaultBackground()
             List {
@@ -2371,8 +2170,8 @@ struct CardListView: View {
                 if visibleCards.isEmpty {
                     emptyState
                 } else {
-                    cardCollection
-                    recentCardRows
+                    cardCollection(visibleCards)
+                    recentCardRows(visibleCards)
                 }
 
                 Label("Card data and sensitive details stay on this device.", systemImage: "lock.fill")
@@ -2396,7 +2195,7 @@ struct CardListView: View {
                     }
                     .accessibilityIdentifier("cards.archived")
                     .accessibilityLabel("Archived cards")
-                    .accessibilityValue("\(model.archivedCards.count) cards")
+                    .accessibilityValue("\(model.sortedArchivedCards.count) cards")
                     .accessibilityHint("Open archived cards")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -2516,11 +2315,14 @@ struct CardListView: View {
     }
 
     private var filterRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        let cards = model.sortedActiveCards
+        let now = Date()
+        let upToDateCount = cards.reduce(0) { $0 + ($1.balanceFreshness(at: now) == .upToDate ? 1 : 0) }
+        return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                filterButton(.all, count: model.sortedCards.count)
-                filterButton(.upToDate, count: model.sortedCards.filter { $0.balanceFreshness() == .upToDate }.count)
-                filterButton(.needsRefresh, count: model.sortedCards.filter { $0.balanceFreshness() == .needsRefresh }.count)
+                filterButton(.all, count: cards.count)
+                filterButton(.upToDate, count: upToDateCount)
+                filterButton(.needsRefresh, count: cards.count - upToDateCount)
             }
         }
         .cardListRowStyle(verticalPadding: 2)
@@ -2528,7 +2330,7 @@ struct CardListView: View {
 
     private var emptyState: some View {
         let noCards = model.cards.isEmpty
-        let allCardsArchived = !noCards && model.activeCards.isEmpty
+        let allCardsArchived = !noCards && model.sortedActiveCards.isEmpty
         return VaultSurface {
             VStack(spacing: 16) {
                 VaultBrandMark(size: 82)
@@ -2565,7 +2367,7 @@ struct CardListView: View {
     }
 
     @ViewBuilder
-    private var cardCollection: some View {
+    private func cardCollection(_ visibleCards: [VaultCard]) -> some View {
         if visibleCards.count > 1 {
             HStack {
                 Text("Cards")
@@ -2640,7 +2442,7 @@ struct CardListView: View {
     }
 
     @ViewBuilder
-    private var recentCardRows: some View {
+    private func recentCardRows(_ visibleCards: [VaultCard]) -> some View {
         HStack {
             Text(isSelectingRecentCards ? "\(selectedCardIDs.count) Selected" : model.settings.sortOption.listHeading)
                 .font(.subheadline.weight(.semibold))

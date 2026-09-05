@@ -369,24 +369,71 @@ final class VaultCardTests: XCTestCase {
         let archivedID1 = try model.addCard(validInput(nickname: "Archived One"))
         let archivedID2 = try model.addCard(validInput(nickname: "Archived Two"))
 
-        XCTAssertEqual(Set(model.activeCards.map(\.id)), Set([activeID, archivedID1, archivedID2]))
-        XCTAssertTrue(model.archivedCards.isEmpty)
-        XCTAssertEqual(Set(model.sortedCards.map(\.id)), Set([activeID, archivedID1, archivedID2]))
+        XCTAssertEqual(Set(model.sortedActiveCards.map(\.id)), Set([activeID, archivedID1, archivedID2]))
+        XCTAssertTrue(model.sortedArchivedCards.isEmpty)
 
         try model.archiveCards(ids: [archivedID1, archivedID2])
-        XCTAssertEqual(Set(model.activeCards.map(\.id)), [activeID])
-        XCTAssertEqual(Set(model.archivedCards.map(\.id)), Set([archivedID1, archivedID2]))
-        XCTAssertEqual(Set(model.sortedCards.map(\.id)), [activeID])
+        XCTAssertEqual(Set(model.sortedActiveCards.map(\.id)), [activeID])
         XCTAssertEqual(Set(model.sortedArchivedCards.map(\.id)), Set([archivedID1, archivedID2]))
-        XCTAssertTrue(model.archivedCards.allSatisfy(\.isArchived))
+        XCTAssertTrue(model.sortedArchivedCards.allSatisfy(\.isArchived))
 
         try model.unarchiveCards(ids: [archivedID1])
-        XCTAssertEqual(Set(model.activeCards.map(\.id)), Set([activeID, archivedID1]))
-        XCTAssertEqual(Set(model.archivedCards.map(\.id)), [archivedID2])
+        XCTAssertEqual(Set(model.sortedActiveCards.map(\.id)), Set([activeID, archivedID1]))
+        XCTAssertEqual(Set(model.sortedArchivedCards.map(\.id)), [archivedID2])
 
         try model.unarchiveCards(ids: [archivedID2])
-        XCTAssertEqual(Set(model.activeCards.map(\.id)), Set([activeID, archivedID1, archivedID2]))
-        XCTAssertTrue(model.archivedCards.isEmpty)
+        XCTAssertEqual(Set(model.sortedActiveCards.map(\.id)), Set([activeID, archivedID1, archivedID2]))
+        XCTAssertTrue(model.sortedArchivedCards.isEmpty)
+    }
+
+    func testSortedCardListsFollowSortSettingAndArchiveMutations() throws {
+        let container = try ModelContainerFactory.makeInMemory()
+        var nextIDs = ["low-card", "high-card", "archived-card"]
+        let repository = SwiftDataCardRepository(
+            context: ModelContext(container),
+            credentialStore: FakeCredentialStore(),
+            uuid: { nextIDs.removeFirst() }
+        )
+        let environment = AppEnvironment(
+            cardRepository: repository,
+            settingsRepository: InMemorySettingsRepository(),
+            biometricService: AlwaysAllowAuthenticationService(),
+            notificationService: NoopNotificationService(),
+            scanner: StaticCardScanner()
+        )
+        let model = AppModel(environment: environment)
+        let lowID = try model.addCard(validInput(nickname: "Low"))
+        let highID = try model.addCard(validInput(nickname: "High"))
+        let archivedID = try model.addCard(validInput(nickname: "Archived"))
+
+        model.applyForegroundRefresh(
+            id: lowID,
+            result: BalanceResult(balance: 4, transactions: [], fetchedAt: Date(timeIntervalSince1970: 10))
+        )
+        model.applyForegroundRefresh(
+            id: highID,
+            result: BalanceResult(balance: 40, transactions: [], fetchedAt: Date(timeIntervalSince1970: 11))
+        )
+        model.applyForegroundRefresh(
+            id: archivedID,
+            result: BalanceResult(balance: 25, transactions: [], fetchedAt: Date(timeIntervalSince1970: 12))
+        )
+
+        model.setSort(.balanceLowToHigh)
+        XCTAssertEqual(model.sortedActiveCards.map(\.id), [lowID, archivedID, highID])
+        XCTAssertTrue(model.sortedArchivedCards.isEmpty)
+
+        try model.archiveCard(id: archivedID)
+        XCTAssertEqual(model.sortedActiveCards.map(\.id), [lowID, highID])
+        XCTAssertEqual(model.sortedArchivedCards.map(\.id), [archivedID])
+
+        model.setSort(.balanceHighToLow)
+        XCTAssertEqual(model.sortedActiveCards.map(\.id), [highID, lowID])
+        XCTAssertEqual(model.sortedArchivedCards.map(\.id), [archivedID])
+
+        try model.unarchiveCard(id: archivedID)
+        XCTAssertEqual(model.sortedActiveCards.map(\.id), [highID, archivedID, lowID])
+        XCTAssertTrue(model.sortedArchivedCards.isEmpty)
     }
 
     func testBulkDeletionRemovesOnlySelectedCardsAndPreservesUnselectedCredentials() throws {
@@ -446,21 +493,6 @@ final class VaultCardTests: XCTestCase {
         XCTAssertNil(card.archivedAt)
         XCTAssertFalse(card.isArchived)
         XCTAssertNil(SchemaV2.CardMetadataRecord(card: card).archivedAt)
-    }
-
-    func testHtmlBalanceParserParsesBalanceAndTransactionsFixture() throws {
-        let html = """
-        <html>
-          <span class="balance-amount">$18.75</span>
-          <table class="transactions"><tbody>
-            <tr><td>2026-06-01</td><td>Market</td><td>-4.25</td></tr>
-          </tbody></table>
-        </html>
-        """
-        let result = try HtmlBalanceParser.parse(html, config: ParserConfig.bundled(), fetchedAt: Date(timeIntervalSince1970: 10))
-        XCTAssertEqual(result.balance, 18.75)
-        XCTAssertEqual(result.transactions.count, 1)
-        XCTAssertEqual(result.transactions.first?.description, "Market")
     }
 
     func testGiftCardMallBridgeRejectsUntrustedHostAndParsesFixture() throws {

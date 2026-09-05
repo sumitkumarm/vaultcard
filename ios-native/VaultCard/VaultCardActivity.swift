@@ -78,8 +78,7 @@ struct ActivityView: View {
         }
     }
 
-    private var visibleEntries: [ActivityEntry] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func visibleEntries(from entries: [ActivityEntry], query: String) -> [ActivityEntry] {
         let calendar = Calendar.current
         let now = Date()
         let lowerBound: Date?
@@ -104,15 +103,21 @@ struct ActivityView: View {
             )
         }
 
-        let filtered = allEntries.filter { entry in
-            let matchesCard = filters.selectedCardIDs.isEmpty || filters.selectedCardIDs.contains(entry.cardID)
-            let matchesLowerBound = lowerBound.map { entry.date >= $0 } ?? true
-            let matchesUpperBound = upperBound.map { entry.date < $0 } ?? true
-            let matchesSearch = query.isEmpty
+        let selectedCardIDs = filters.selectedCardIDs
+        let filtered = entries.filter { entry in
+            if !selectedCardIDs.isEmpty && !selectedCardIDs.contains(entry.cardID) {
+                return false
+            }
+            if let lowerBound, entry.date < lowerBound {
+                return false
+            }
+            if let upperBound, entry.date >= upperBound {
+                return false
+            }
+            return query.isEmpty
                 || entry.description.localizedCaseInsensitiveContains(query)
                 || entry.cardName.localizedCaseInsensitiveContains(query)
                 || entry.last4.contains(query)
-            return matchesCard && matchesLowerBound && matchesUpperBound && matchesSearch
         }
 
         return filtered.sorted { lhs, rhs in
@@ -130,30 +135,27 @@ struct ActivityView: View {
         }
     }
 
-    private var isRefined: Bool {
-        filters.hasFilters || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var visibleTotal: Double {
-        visibleEntries.reduce(0) { $0 + $1.amount }
-    }
-
     var body: some View {
+        let entries = allEntries
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filteredEntries = entries.isEmpty ? [] : visibleEntries(from: entries, query: query)
+        let refined = filters.hasFilters || !query.isEmpty
+
         ZStack {
             VaultBackground()
             List {
-                if allEntries.isEmpty {
+                if entries.isEmpty {
                     emptyActivity
                 } else {
-                    if isRefined {
-                        filteredSummary
+                    if refined {
+                        filteredSummary(total: filteredEntries.reduce(0) { $0 + $1.amount }, count: filteredEntries.count)
                     }
 
-                    if visibleEntries.isEmpty {
+                    if filteredEntries.isEmpty {
                         noResults
                     } else {
                         Section {
-                            ForEach(visibleEntries) { entry in
+                            ForEach(filteredEntries) { entry in
                                 Button {
                                     model.routePath.append(.detail(entry.cardID))
                                 } label: {
@@ -167,7 +169,7 @@ struct ActivityView: View {
                                 .accessibilityHint("Open \(entry.cardName)")
                             }
                         } header: {
-                            Text("\(visibleEntries.count) transaction\(visibleEntries.count == 1 ? "" : "s")")
+                            Text("\(filteredEntries.count) transaction\(filteredEntries.count == 1 ? "" : "s")")
                                 .textCase(nil)
                         }
                     }
@@ -216,17 +218,17 @@ struct ActivityView: View {
         .accessibilityIdentifier("activity.screen")
     }
 
-    private var filteredSummary: some View {
+    private func filteredSummary(total: Double, count: Int) -> some View {
         HStack(spacing: 20) {
             summaryMetric(
                 title: "Net amount",
-                value: visibleTotal.formatted(.currency(code: "USD"))
+                value: total.formatted(.currency(code: "USD"))
             )
             Divider()
                 .frame(height: 36)
             summaryMetric(
                 title: "Transactions",
-                value: visibleEntries.count.formatted()
+                value: count.formatted()
             )
         }
         .padding(16)
