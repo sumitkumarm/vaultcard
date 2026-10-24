@@ -49,7 +49,8 @@ flutter test
 Choose **Add Multiple Cards** from the add-card flow. Photograph a grid, select photos,
 import an image or delimited text file, or paste spreadsheet rows. Columns should be
 card number, expiry (one column or separate month and year), then optional CVV/PIN.
-English month names and abbreviations are case insensitive; numeric months and
+Table headings are used to locate credentials and ignore extra columns such as balance
+and last-updated dates. English month names and abbreviations are case insensitive; numeric months and
 2- or 4-digit years (including apostrophe-prefixed years) are supported. A PIN header
 selects PIN automatically; each reviewed row can also switch its code to PIN.
 

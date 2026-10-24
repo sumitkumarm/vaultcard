@@ -41,12 +41,42 @@ struct BulkCardRow: Identifiable {
 }
 
 enum BulkCardParser {
-    private struct OCRFragment {
+    struct OCRFragment {
         var text: String
         var x: CGFloat
         var maxX: CGFloat
         var y: CGFloat
         var height: CGFloat
+    }
+
+    private enum ColumnKind: Hashable {
+        case card
+        case month
+        case year
+        case expiry
+        case code
+        case pin
+    }
+
+    private struct ColumnAnchor {
+        var kind: ColumnKind
+        var x: CGFloat
+    }
+
+    private struct TextHeader {
+        var card: Int?
+        var month: Int?
+        var year: Int?
+        var expiry: Int?
+        var code: Int?
+        var codeIsPIN: Bool
+    }
+
+    private struct CardCandidate {
+        var digits: String
+        var start: Int
+        var end: Int
+        var score: Int
     }
 
     private struct ExpiryMatch {
@@ -56,12 +86,26 @@ enum BulkCardParser {
 
     static func parse(_ text: String) -> [BulkCardRow] {
         let lines = text.components(separatedBy: .newlines)
-        let pinHeaders = lines.contains { isHeader($0) && headerHasPIN($0) }
+        let header = lines.enumerated().compactMap { index, line -> (Int, TextHeader)? in
+            guard let columns = delimitedColumns(line), let header = textHeader(columns) else { return nil }
+            return (index, header)
+        }.first
+
+        if let header {
+            let (headerIndex, headerLayout) = header
+            return lines.enumerated().compactMap { index, rawLine in
+                guard index > headerIndex,
+                      let columns = delimitedColumns(rawLine),
+                      let row = parseTextHeaderRow(columns, header: headerLayout, sourceRow: index + 1) else { return nil }
+                return row
+            }
+        }
 
         return lines.enumerated().compactMap { index, rawLine in
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !line.isEmpty, !isHeader(line) else { return nil }
-            return parseRow(line, sourceRow: index + 1, codeIsPIN: pinHeaders)
+            let parsed = parseRow(line, sourceRow: index + 1, codeIsPIN: false)
+            return parsed.cardNumber.count >= 12 ? parsed : nil
         }
     }
 
@@ -85,19 +129,8 @@ enum BulkCardParser {
                     }
                     try handler.perform([request])
 
-                    let fragments = (request.results ?? []).compactMap { observation -> OCRFragment? in
-                        guard let text = observation.topCandidates(1).first?.string,
-                              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-                        let box = observation.boundingBox
-                        return OCRFragment(
-                            text: text,
-                            x: box.minX,
-                            maxX: box.maxX,
-                            y: box.midY,
-                            height: box.height
-                        )
-                    }
-                    continuation.resume(returning: parse(assembleRows(fragments)))
+                    let fragments = (request.results ?? []).flatMap(ocrFragments)
+                    continuation.resume(returning: parseOCRFragments(fragments))
                 } catch {
                     continuation.resume(throwing: error)
                 }
@@ -107,6 +140,68 @@ enum BulkCardParser {
 
     private enum RecognitionError: Error {
         case imageUnavailable
+    }
+
+    /// Keeps the word-level Vision geometry so grid columns survive OCR. This is
+    /// internal to the module so tests can exercise dense layouts deterministically.
+    static func parseOCRFragments(_ fragments: [OCRFragment]) -> [BulkCardRow] {
+        let rows = clusterOCRRows(fragments)
+        guard let header = rows.enumerated().compactMap({ index, row in
+            geometryHeader(row).map { (index, $0.0, $0.1) }
+        }).first else {
+            // Headerless OCR still benefits from keeping each visual line intact.
+            return rows.enumerated().compactMap { index, row in
+                let text = row.sorted { $0.x < $1.x }.map(\.text).joined(separator: " ")
+                guard !text.isEmpty, !isHeader(text) else { return nil }
+                let parsed = parseRow(text, sourceRow: index + 1, codeIsPIN: false)
+                return parsed.cardNumber.count >= 12 ? parsed : nil
+            }
+        }
+
+        return rows.enumerated().compactMap { index, row in
+            guard index > header.0, !isGeometryHeader(row) else { return nil }
+            return parseGeometryRow(row, anchors: header.1, codeIsPIN: header.2, sourceRow: index + 1)
+        }
+    }
+
+    private static func ocrFragments(_ observation: VNRecognizedTextObservation) -> [OCRFragment] {
+        guard let candidate = observation.topCandidates(1).first else { return [] }
+        let text = candidate.string
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+
+        var ranges: [Range<String.Index>] = []
+        var start: String.Index?
+        for index in text.indices {
+            if text[index].isWhitespace {
+                if let start, start < index { ranges.append(start..<index) }
+                start = nil
+            } else if start == nil {
+                start = index
+            }
+        }
+        if let start, start < text.endIndex { ranges.append(start..<text.endIndex) }
+        guard !ranges.isEmpty else { return [] }
+
+        let fallback = observation.boundingBox
+        let length = max(1, text.count)
+        return ranges.map { range in
+            let token = String(text[range])
+            if let tokenBox = try? candidate.boundingBox(for: range) {
+                let box = tokenBox.boundingBox
+                return OCRFragment(text: token, x: box.minX, maxX: box.maxX, y: box.midY, height: box.height)
+            }
+            let leading = CGFloat(text.distance(from: text.startIndex, to: range.lowerBound)) / CGFloat(length)
+            let trailing = CGFloat(text.distance(from: text.startIndex, to: range.upperBound)) / CGFloat(length)
+            let minX = fallback.minX + fallback.width * leading
+            let maxX = fallback.minX + fallback.width * trailing
+            return OCRFragment(
+                text: token,
+                x: minX,
+                maxX: max(maxX, minX + fallback.width / CGFloat(ranges.count)),
+                y: fallback.midY,
+                height: fallback.height
+            )
+        }
     }
 
     private static func cgImageOrientation(_ orientation: UIImage.Orientation) -> CGImagePropertyOrientation {
@@ -123,42 +218,170 @@ enum BulkCardParser {
         }
     }
 
-    /// Vision may return separate observations for each cell. Cluster by vertical
-    /// center first, then rebuild each row left-to-right so columns never pair
-    /// with values from a neighboring card row.
-    private static func assembleRows(_ fragments: [OCRFragment]) -> String {
-        let sorted = fragments.sorted { $0.y > $1.y }
+    private static func clusterOCRRows(_ fragments: [OCRFragment]) -> [[OCRFragment]] {
         var rows: [[OCRFragment]] = []
-        for fragment in sorted {
-            if let rowIndex = rows.indices.min(by: {
-                abs(rows[$0].map(\.y).reduce(0, +) / CGFloat(rows[$0].count) - fragment.y)
-                    < abs(rows[$1].map(\.y).reduce(0, +) / CGFloat(rows[$1].count) - fragment.y)
-            }), let first = rows[rowIndex].first {
-                let center = rows[rowIndex].map(\.y).reduce(0, +) / CGFloat(rows[rowIndex].count)
-                let tolerance = min(0.025, min(first.height, fragment.height) * 0.8)
-                if abs(center - fragment.y) <= tolerance {
-                    rows[rowIndex].append(fragment)
-                    continue
-                }
+        for fragment in fragments.sorted(by: { $0.y > $1.y }) {
+            var best: (index: Int, residual: CGFloat)?
+            for index in rows.indices {
+                let residual = abs(predictedY(in: rows[index], at: (fragment.x + fragment.maxX) / 2) - fragment.y)
+                let rowHeight = rows[index].map(\.height).sorted().dropFirst(rows[index].count / 2).first ?? fragment.height
+                let tolerance = min(0.021, max(0.008, min(rowHeight, fragment.height) * 1.0))
+                guard residual <= tolerance else { continue }
+                if best == nil || residual < best!.residual { best = (index, residual) }
             }
-            rows.append([fragment])
+            if let best { rows[best.index].append(fragment) }
+            else { rows.append([fragment]) }
+        }
+        let orderedRows: [[OCRFragment]] = rows.map { row in
+            row.sorted { lhs, rhs in lhs.x < rhs.x }
+        }
+        return orderedRows.sorted { lhs, rhs in
+            let lhsMeanY = lhs.reduce(CGFloat.zero) { $0 + $1.y } / CGFloat(max(1, lhs.count))
+            let rhsMeanY = rhs.reduce(CGFloat.zero) { $0 + $1.y } / CGFloat(max(1, rhs.count))
+            return lhsMeanY > rhsMeanY
+        }
+    }
+
+    private static func predictedY(in row: [OCRFragment], at x: CGFloat) -> CGFloat {
+        guard !row.isEmpty else { return 0 }
+        let centers = row.map { (($0.x + $0.maxX) / 2, $0.y) }
+        let meanX = centers.map(\.0).reduce(0, +) / CGFloat(centers.count)
+        let meanY = centers.map(\.1).reduce(0, +) / CGFloat(centers.count)
+        let variance = centers.reduce(CGFloat.zero) { $0 + pow($1.0 - meanX, 2) }
+        guard variance > 0.000001 else { return meanY }
+        let covariance = centers.reduce(CGFloat.zero) { $0 + ($1.0 - meanX) * ($1.1 - meanY) }
+        return meanY + (covariance / variance) * (x - meanX)
+    }
+
+    private static func geometryHeader(_ row: [OCRFragment]) -> ([ColumnAnchor], Bool)? {
+        var positions: [ColumnKind: [CGFloat]] = [:]
+        for fragment in row {
+            guard let kind = headerKind(fragment.text) else { continue }
+            positions[kind, default: []].append((fragment.x + fragment.maxX) / 2)
+        }
+        guard let cardX = positions[.card]?.first else { return nil }
+
+        let balanceX = row.first(where: { $0.text.lowercased().contains("balance") })
+            .map { ($0.x + $0.maxX) / 2 }
+        if let balanceX, balanceX > cardX {
+            let known = positions.values.flatMap { $0 }
+            let unknownPositions = row.filter { fragment in
+                let x = (fragment.x + fragment.maxX) / 2
+                return headerKind(fragment.text) == nil
+                    && x > cardX + 0.035 && x < balanceX - 0.025
+                    && !known.contains(where: { abs($0 - x) < 0.03 })
+            }.map { ($0.x + $0.maxX) / 2 }
+            let unknown = unknownPositions.sorted()
+            var needed: [ColumnKind] = []
+            if positions[.expiry] == nil {
+                if positions[.month] == nil { needed.append(.month) }
+                if positions[.year] == nil { needed.append(.year) }
+            }
+            for (kind, x) in zip(needed, unknown) { positions[kind, default: []].append(x) }
+
         }
 
-        return rows.map { row in
-            let ordered = row.sorted { $0.x < $1.x }
-            var result = ""
-            var previous: OCRFragment?
-            for fragment in ordered {
-                if let previous {
-                    let gap = fragment.x - previous.maxX
-                    let columnGap = max(0.026, max(previous.height, fragment.height) * 1.6)
-                    result += gap >= columnGap ? "\t" : " "
-                }
-                result += fragment.text
-                previous = fragment
+        let hasExpiry = positions[.expiry] != nil || (positions[.month] != nil && positions[.year] != nil)
+        guard hasExpiry else { return nil }
+
+        var anchors: [ColumnAnchor] = []
+        for (kind, xs) in positions {
+            let groups = groupHeaderPositions(xs)
+            anchors.append(contentsOf: groups.map { ColumnAnchor(kind: kind, x: $0) })
+        }
+        return (anchors.sorted { $0.x < $1.x }, positions[.pin] != nil)
+    }
+
+    private static func groupHeaderPositions(_ positions: [CGFloat]) -> [CGFloat] {
+        let ordered = positions.sorted()
+        var groups: [[CGFloat]] = []
+        for x in ordered {
+            if let last = groups.indices.last, x - (groups[last].last ?? x) <= 0.045 {
+                groups[last].append(x)
+            } else {
+                groups.append([x])
             }
-            return result
-        }.joined(separator: "\n")
+        }
+        return groups.map { $0.reduce(0, +) / CGFloat($0.count) }
+    }
+
+    private static func isGeometryHeader(_ row: [OCRFragment]) -> Bool {
+        geometryHeader(row) != nil
+    }
+
+    private static func headerKind(_ raw: String) -> ColumnKind? {
+        let normalized = raw.lowercased().filter(\.isLetter)
+        if normalized.contains("securitycode") { return .code }
+        if normalized.contains("month") { return .month }
+        if normalized.contains("year") { return .year }
+        if normalized.contains("expiry") || normalized.contains("expiration") { return .expiry }
+        switch normalized {
+        case "card", "number", "pan", "cardnumber": return .card
+        case "month", "months": return .month
+        case "year", "date": return .year
+        case "expiry", "expiration", "exp": return .expiry
+        case "cvv", "cvc", "securitycode", "code": return .code
+        case "pin": return .pin
+        case "cw", "cwy", "cwv", "cvy": return .code
+        default: return nil
+        }
+    }
+
+    private static func parseGeometryRow(
+        _ row: [OCRFragment],
+        anchors: [ColumnAnchor],
+        codeIsPIN: Bool,
+        sourceRow: Int
+    ) -> BulkCardRow? {
+        let ordered = row.sorted { $0.x < $1.x }
+        let allFields = ordered.map(\.text)
+        guard let candidate = bestCardCandidate(in: allFields), candidate.digits.count >= 12 else { return nil }
+        let panFragments = Array(ordered[candidate.start...candidate.end])
+        let panCenter = (panFragments.map(\.x).min()! + panFragments.map(\.maxX).max()!) / 2
+        let rowAnchors = anchors.map { anchor in
+            anchor.kind == .card ? ColumnAnchor(kind: .card, x: panCenter) : anchor
+        }
+        let panIndices = Set(candidate.start...candidate.end)
+
+        var cells: [ColumnKind: [OCRFragment]] = [:]
+        for (index, fragment) in ordered.enumerated() where !panIndices.contains(index) {
+            guard let kind = nearestColumn(to: (fragment.x + fragment.maxX) / 2, anchors: rowAnchors) else { continue }
+            cells[kind, default: []].append(fragment)
+        }
+
+        var expiry = ""
+        if let expiryCell = joinedCell(cells[.expiry]), let match = expiryMatch(in: expiryCell) {
+            expiry = match.value
+        }
+        if expiry.isEmpty, let month = joinedCell(cells[.month]), let year = joinedCell(cells[.year]) {
+            expiry = makeExpiry(month: month, year: year) ?? "\(month)/\(year)"
+        }
+        let codeKind: ColumnKind = codeIsPIN ? .pin : .code
+        let code = joinedCell(cells[codeKind]).map(cleanCode) ?? ""
+        return BulkCardRow(
+            cardNumber: candidate.digits,
+            expiry: expiry,
+            code: code,
+            codeIsPIN: codeIsPIN,
+            sourceRow: sourceRow
+        )
+    }
+
+    private static func nearestColumn(to x: CGFloat, anchors: [ColumnAnchor]) -> ColumnKind? {
+        let ordered = anchors.sorted { $0.x < $1.x }
+        guard let nearestIndex = ordered.indices.min(by: { abs(ordered[$0].x - x) < abs(ordered[$1].x - x) }) else { return nil }
+        let anchor = ordered[nearestIndex]
+        let leftGap = nearestIndex > 0 ? anchor.x - ordered[nearestIndex - 1].x : (ordered.dropFirst().first?.x ?? anchor.x + 0.1) - anchor.x
+        let rightGap = nearestIndex + 1 < ordered.count ? ordered[nearestIndex + 1].x - anchor.x : leftGap
+        let halfGap = max(0.012, min(leftGap, rightGap) * 0.58)
+        guard abs(x - anchor.x) <= halfGap + 0.018 else { return nil }
+        return anchor.kind
+    }
+
+    private static func joinedCell(_ fragments: [OCRFragment]?) -> String? {
+        guard let fragments, !fragments.isEmpty else { return nil }
+        return fragments.sorted { $0.x < $1.x }.map(\.text).joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func parseRow(_ line: String, sourceRow: Int, codeIsPIN: Bool) -> BulkCardRow {
@@ -194,45 +417,89 @@ enum BulkCardParser {
         return columns
     }
 
-    private static func parseDelimited(_ columns: [String], sourceRow: Int, codeIsPIN: Bool) -> BulkCardRow {
-        var cardDigits = ""
-        var panFieldCount = 0
+    private static func textHeader(_ columns: [String]) -> TextHeader? {
+        var result = TextHeader(codeIsPIN: false)
         for index in columns.indices {
-            var field = columns[index]
-            if index == 0 { field = removeLeadingLabel(field, labels: ["card", "number", "pan"]) }
-            if index > 0, index + 1 < columns.count,
-               cardDigits.count >= 12, isMonth(field), isYear(columns[index + 1]) {
-                break
+            let normalized = columns[index].lowercased().filter(\.isLetter)
+            if let kind = headerKind(normalized) {
+                switch kind {
+                case .card: result.card = result.card ?? index
+                case .month: result.month = result.month ?? index
+                case .year: result.year = result.year ?? index
+                case .expiry: result.expiry = result.expiry ?? index
+                case .code: result.code = result.code ?? index
+                case .pin:
+                    result.code = result.code ?? index
+                    result.codeIsPIN = true
+                }
+            } else if normalized.contains("expiration") || normalized.contains("expiry") {
+                result.expiry = result.expiry ?? index
+            } else if normalized.contains("securitycode") {
+                result.code = result.code ?? index
             }
-            guard isNumericGroup(field) else { break }
-            let digits = digitsOnly(field)
-            guard !digits.isEmpty, cardDigits.count + digits.count <= 19 else { break }
-            cardDigits += digits
-            panFieldCount += 1
-            if cardDigits.count >= 13 { break }
+        }
+        guard result.card != nil,
+              result.expiry != nil || (result.month != nil && result.year != nil) else { return nil }
+        return result
+    }
+
+    private static func parseTextHeaderRow(
+        _ columns: [String],
+        header: TextHeader,
+        sourceRow: Int
+    ) -> BulkCardRow? {
+        guard let cardIndex = header.card, columns.indices.contains(cardIndex) else { return nil }
+        let cardField = removeLeadingLabel(columns[cardIndex], labels: ["card", "number", "pan"])
+        guard let card = bestCardCandidate(in: cardField.split(whereSeparator: { $0.isWhitespace }).map(String.init)) else {
+            return nil
         }
 
         var expiry = ""
-        var used = Set<Int>(columns.indices.filter { $0 < panFieldCount })
-        let firstBodyColumn = max(1, panFieldCount)
-        if columns.indices.contains(firstBodyColumn) {
-            if let match = expiryMatch(in: columns[firstBodyColumn]) {
+        var splitYearIndex: Int?
+        if let expiryIndex = header.expiry, columns.indices.contains(expiryIndex),
+           let match = expiryMatch(in: columns[expiryIndex]) {
+            expiry = match.value
+        } else if let expiryIndex = header.expiry, columns.indices.contains(expiryIndex),
+                  columns.indices.contains(expiryIndex + 1), isMonth(columns[expiryIndex]),
+                  isYear(columns[expiryIndex + 1]) {
+            expiry = makeExpiry(month: columns[expiryIndex], year: columns[expiryIndex + 1])
+                ?? "\(columns[expiryIndex])/\(columns[expiryIndex + 1])"
+            splitYearIndex = expiryIndex + 1
+        }
+        if expiry.isEmpty, let monthIndex = header.month, let yearIndex = header.year,
+           columns.indices.contains(monthIndex), columns.indices.contains(yearIndex) {
+            let month = columns[monthIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+            let year = columns[yearIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+            if let match = expiryMatch(in: month) {
                 expiry = match.value
-                used.insert(firstBodyColumn)
-            } else if columns.indices.contains(firstBodyColumn + 1),
-                      isMonth(columns[firstBodyColumn]), isYear(columns[firstBodyColumn + 1]) {
-                let month = columns[firstBodyColumn]
-                let year = columns[firstBodyColumn + 1]
+            } else if !month.isEmpty || !year.isEmpty {
                 expiry = makeExpiry(month: month, year: year) ?? "\(month)/\(year)"
-                used.formUnion([firstBodyColumn, firstBodyColumn + 1])
-            } else if !columns[firstBodyColumn].isEmpty {
-                expiry = stripExpiryLabel(columns[firstBodyColumn])
-                used.insert(firstBodyColumn)
             }
         }
 
-        let codeColumn = columns.indices.reversed().first { !used.contains($0) }
-        let code = codeColumn.map { cleanCode(columns[$0]) } ?? ""
+        var codeIndex = header.code
+        if let splitYearIndex, codeIndex == splitYearIndex, columns.indices.contains(splitYearIndex + 1) {
+            codeIndex = splitYearIndex + 1
+        }
+        let code = codeIndex.flatMap { columns.indices.contains($0) ? cleanCode(columns[$0]) : nil } ?? ""
+        return BulkCardRow(
+            cardNumber: card.digits,
+            expiry: expiry,
+            code: code,
+            codeIsPIN: header.codeIsPIN,
+            sourceRow: sourceRow
+        )
+    }
+
+    private static func parseDelimited(_ columns: [String], sourceRow: Int, codeIsPIN: Bool) -> BulkCardRow {
+        let normalized = columns.enumerated().map { index, column in
+            index == 0 ? removeLeadingLabel(column, labels: ["card", "number", "pan"]) : column
+        }
+        let candidate = bestCardCandidate(in: normalized)
+        let cardDigits = candidate?.digits ?? ""
+        let afterPAN = candidate.map { Array(normalized.dropFirst($0.end + 1)) } ?? []
+        let (expiry, expiryIndices) = findExpiry(in: afterPAN)
+        let code = firstCode(in: afterPAN, skipping: expiryIndices, hasExpiry: !expiry.isEmpty)
         return BulkCardRow(
             cardNumber: cardDigits,
             expiry: expiry,
@@ -248,49 +515,11 @@ enum BulkCardParser {
             tokens.removeFirst()
         }
 
-        var panTokens: [String] = []
-        var panDigits = ""
-        for token in tokens {
-            guard isNumericGroup(token) else { break }
-            let digits = digitsOnly(token)
-            guard panDigits.count + digits.count <= 19 else { break }
-            panTokens.append(token)
-            panDigits += digits
-            if panDigits.count >= 13 { break }
-        }
-
-        let body = Array(tokens.dropFirst(panTokens.count))
-        var expiry = ""
-        var usedBodyIndices = Set<Int>()
-        if !body.isEmpty {
-            for index in body.indices {
-                if let match = expiryMatch(in: body[index]) {
-                    expiry = match.value
-                    usedBodyIndices.insert(index)
-                    if match.tokenCount == 2, body.indices.contains(index + 1) {
-                        usedBodyIndices.insert(index + 1)
-                    }
-                    break
-                }
-                if index + 1 < body.count, isMonth(body[index]), isYear(body[index + 1]) {
-                    expiry = makeExpiry(month: body[index], year: body[index + 1])
-                        ?? "\(body[index])/\(body[index + 1])"
-                    usedBodyIndices.formUnion([index, index + 1])
-                    break
-                }
-            }
-        }
-
-        if expiry.isEmpty {
-            // Keep the nearest non-code field as an editable malformed expiry candidate.
-            let values = body.enumerated().filter { !usedBodyIndices.contains($0.offset) && !isFieldLabel($0.element) }
-            if let candidate = values.first(where: { !isLikelyCode($0.element) }) {
-                expiry = stripExpiryLabel(candidate.element)
-            }
-        }
-
-        let remaining = body.enumerated().filter { !usedBodyIndices.contains($0.offset) && !isFieldLabel($0.element) }
-        let code = remaining.last.map { cleanCode($0.element) } ?? ""
+        let candidate = bestCardCandidate(in: tokens)
+        let panDigits = candidate?.digits ?? ""
+        let body = candidate.map { Array(tokens.dropFirst($0.end + 1)) } ?? []
+        let (expiry, expiryIndices) = findExpiry(in: body)
+        let code = firstCode(in: body, skipping: expiryIndices, hasExpiry: !expiry.isEmpty)
         return BulkCardRow(
             cardNumber: panDigits,
             expiry: expiry,
@@ -298,6 +527,66 @@ enum BulkCardParser {
             codeIsPIN: codeIsPIN,
             sourceRow: sourceRow
         )
+    }
+
+    private static func bestCardCandidate(in fields: [String]) -> CardCandidate? {
+        var best: CardCandidate?
+        for start in fields.indices {
+            var digits = ""
+            var groupLengths: [Int] = []
+            for end in start..<min(fields.count, start + 7) {
+                let field = fields[end].trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let group = normalizedCardGroup(field) else { break }
+                guard !group.isEmpty, digits.count + group.count <= 19 else { break }
+                digits += group
+                groupLengths.append(group.count)
+                guard (12...19).contains(digits.count) else { continue }
+
+                let fourDigitGroups = groupLengths.filter { $0 == 4 }.count
+                let shortGroups = groupLengths.filter { $0 <= 2 }.count
+                let score = (digits.count == 16 ? 8 : 0)
+                    + fourDigitGroups * 2
+                    + (groupLengths.count == 1 ? 2 : 0)
+                    - shortGroups * 3
+                    + (CardRules.isValidCardNumber(digits) ? 2 : 0)
+                let candidate = CardCandidate(digits: digits, start: start, end: end, score: score)
+                if best == nil || candidate.score > best!.score
+                    || (candidate.score == best!.score && candidate.digits.count > best!.digits.count) {
+                    best = candidate
+                }
+            }
+        }
+        return best
+    }
+
+    private static func findExpiry(in fields: [String]) -> (value: String, indices: Set<Int>) {
+        for index in fields.indices {
+            if let match = expiryMatch(in: fields[index]) {
+                var used = Set([index])
+                if match.tokenCount == 2, fields.indices.contains(index + 1) { used.insert(index + 1) }
+                return (match.value, used)
+            }
+            if fields.indices.contains(index + 1), isMonth(fields[index]), isYear(fields[index + 1]) {
+                let expiry = makeExpiry(month: fields[index], year: fields[index + 1])
+                    ?? "\(fields[index])/\(fields[index + 1])"
+                return (expiry, [index, index + 1])
+            }
+        }
+
+        // Keep a nearby malformed expiry value reviewable, while excluding a likely code.
+        if let first = fields.indices.first,
+           !isFieldLabel(fields[first]), !fields[first].isEmpty, !isLikelyCode(fields[first]) {
+            return (stripExpiryLabel(fields[first]), [first])
+        }
+        return ("", [])
+    }
+
+    private static func firstCode(in fields: [String], skipping: Set<Int>, hasExpiry: Bool) -> String {
+        let eligible = fields.indices.filter { !skipping.contains($0) && !isFieldLabel(fields[$0]) }
+        let codeIndex = hasExpiry
+            ? eligible.first(where: { $0 > (skipping.max() ?? -1) })
+            : eligible.first(where: { !fields[$0].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        return codeIndex.map { cleanCode(fields[$0]) } ?? ""
     }
 
     private static func expiryMatch(in raw: String) -> ExpiryMatch? {
@@ -380,10 +669,6 @@ enum BulkCardParser {
         return hasColumnWord
     }
 
-    private static func headerHasPIN(_ line: String) -> Bool {
-        line.lowercased().range(of: #"\bpin\b"#, options: .regularExpression) != nil
-    }
-
     private static func isCardLabel(_ token: String) -> Bool {
         let cleaned = token.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ":#"))
         return ["card", "number", "pan", "no"].contains(cleaned)
@@ -415,6 +700,13 @@ enum BulkCardParser {
 
     private static func isNumericGroup(_ token: String) -> Bool {
         matches(token, pattern: #"^[\d\s-]+$"#)
+    }
+
+    private static func normalizedCardGroup(_ raw: String) -> String? {
+        let edgePunctuation = CharacterSet(charactersIn: ".,;:|\"'‘’()[]{}")
+        let trimmed = raw.trimmingCharacters(in: edgePunctuation)
+        guard isNumericGroup(trimmed) else { return nil }
+        return digitsOnly(trimmed)
     }
 
     private static func isLikelyCode(_ token: String) -> Bool {

@@ -121,6 +121,95 @@ final class BulkCardParserTests: XCTestCase {
         XCTAssertEqual(rows[1].code, "987")
     }
 
+    func testHeaderMappingIgnoresRowLabelsAndTrailingColumns() {
+        let rows = BulkCardParser.parse("""
+        Row,Card,Month,Date (year),CVV,Balance,Last updated
+        1,4111111111111111,09,35,021,48.25,10/24/2026
+        2,5555555555554444,11,36,,19.00,10/24/2026
+        """)
+
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[0].cardNumber, "4111111111111111")
+        XCTAssertEqual(rows[0].expiry, "09/35")
+        XCTAssertEqual(rows[0].code, "021")
+        XCTAssertEqual(rows[1].cardNumber, "5555555555554444")
+        XCTAssertEqual(rows[1].expiry, "11/36")
+        XCTAssertEqual(rows[1].code, "")
+    }
+
+    func testHeaderWithoutSecurityCodeLeavesCodeEmpty() {
+        let rows = BulkCardParser.parse("""
+        Card,Month,Date (year),Balance,Last updated
+        4111111111111111,9,2035,123,10/24/2026
+        """)
+
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].expiry, "09/35")
+        XCTAssertEqual(rows[0].code, "")
+    }
+
+    func testExpiryMonthAndYearHeadersMapByComponent() {
+        let row = BulkCardParser.parse("""
+        Card,Expiry Month,Expiry Year,CVV,Balance
+        4111111111111111,06,2035,021,123.00
+        """).first
+
+        XCTAssertEqual(row?.expiry, "06/35")
+        XCTAssertEqual(row?.code, "021")
+    }
+
+    func testHeaderlessRowsUseFirstCVVCandidateBeforeTrailingData() {
+        let row = BulkCardParser.parse("4111111111111111 09/35 021 48.25 10/24/2026").first
+
+        XCTAssertEqual(row?.cardNumber, "4111111111111111")
+        XCTAssertEqual(row?.expiry, "09/35")
+        XCTAssertEqual(row?.code, "021")
+    }
+
+    func testEmptyCodeCellDoesNotUseLaterNumericColumns() {
+        let row = BulkCardParser.parse("4111111111111111,06,35,,123,Jun08").first
+
+        XCTAssertEqual(row?.expiry, "06/35")
+        XCTAssertEqual(row?.code, "")
+    }
+
+    func testPANCandidateTrimsTrailingOCRPunctuationOnly() {
+        let rows = BulkCardParser.parse("4111111111111111. 09/35 021")
+
+        XCTAssertEqual(rows.first?.cardNumber, "4111111111111111")
+        XCTAssertEqual(rows.first?.expiry, "09/35")
+        XCTAssertEqual(rows.first?.code, "021")
+        XCTAssertTrue(BulkCardParser.parse("48.25 06/35 123").isEmpty)
+    }
+
+    func testNoisyCVVHeadingDoesNotSelectFilterArrowAsCodeColumn() {
+        for heading in ["CVV", "CW", "cWv", "CWY"] {
+            var fragments = makeDenseTableFragments(rowCount: 23, omitCodeOn: [])
+            let index = fragments.firstIndex { $0.text == "CW" }!
+            fragments[index].text = heading
+            let rows = BulkCardParser.parseOCRFragments(fragments)
+            XCTAssertEqual(rows.count, 23)
+            for rowIndex in rows.indices {
+                XCTAssertEqual(rows[rowIndex].code, String(format: "%03d", (rowIndex * 7) % 1000))
+            }
+        }
+    }
+
+    func testDenseGeometryTableKeepsColumnsAndRowsAligned() {
+        let fragments = makeDenseTableFragments(rowCount: 23, omitCodeOn: [7, 18])
+        let rows = BulkCardParser.parseOCRFragments(fragments)
+
+        XCTAssertEqual(rows.count, 23)
+        for index in 0..<23 {
+            let expectedPAN = String(format: "400000000000%04d", index + 1)
+            let expectedExpiry = String(format: "%02d/%02d", index % 12 + 1, 35 + index / 12)
+            let expectedCode = [7, 18].contains(index) ? "" : String(format: "%03d", (index * 7) % 1000)
+            XCTAssertEqual(rows[index].cardNumber, expectedPAN, "row \(index + 1)")
+            XCTAssertEqual(rows[index].expiry, expectedExpiry, "row \(index + 1)")
+            XCTAssertEqual(rows[index].code, expectedCode, "row \(index + 1)")
+        }
+    }
+
     func testVisionRecognizesTwoSyntheticGridRowsWithoutCrossPairing() async throws {
         let image = makeGridImage()
         let rows = try await BulkCardParser.recognize(image)
@@ -152,5 +241,48 @@ final class BulkCardParserTests: XCTestCase {
                 code.draw(at: CGPoint(x: 900, y: top), withAttributes: attributes)
             }
         }
+    }
+
+    private func makeDenseTableFragments(rowCount: Int, omitCodeOn missingCodeRows: Set<Int>) -> [BulkCardParser.OCRFragment] {
+        var fragments: [BulkCardParser.OCRFragment] = []
+        func add(_ text: String, x: CGFloat, y: CGFloat, width: CGFloat = 0.025) {
+            fragments.append(.init(text: text, x: x, maxX: x + width, y: y, height: 0.014))
+        }
+
+        let headerY: CGFloat = 0.965
+        add("Card", x: 0.135, y: headerY)
+        add("~", x: 0.385, y: headerY) // OCR miss for Month
+        add("~", x: 0.545, y: headerY) // OCR miss for Date (year)
+        add("CW", x: 0.685, y: headerY) // OCR commonly reads CVV this way
+        add("Y", x: 0.707, y: headerY, width: 0.01)
+        add("Balance", x: 0.805, y: headerY)
+        add("Last", x: 0.925, y: headerY)
+        add("updated", x: 0.951, y: headerY)
+
+        for index in 0..<rowCount {
+            let baseline = CGFloat(0.91 - Double(index) * 0.032)
+            func skewedY(_ x: CGFloat) -> CGFloat { baseline + (x - 0.15) * 0.015 }
+            add("\(index + 1)", x: 0.018, y: skewedY(0.018), width: 0.01) // spreadsheet row label
+            let pan = String(format: "400000000000%04d", index + 1)
+            for (groupIndex, start) in stride(from: 0, to: pan.count, by: 4).enumerated() {
+                let lower = pan.index(pan.startIndex, offsetBy: start)
+                let upper = pan.index(lower, offsetBy: min(4, pan.distance(from: lower, to: pan.endIndex)))
+                let x = CGFloat(0.112 + Double(groupIndex) * 0.031)
+                add(String(pan[lower..<upper]), x: x, y: skewedY(x), width: 0.027)
+            }
+            let monthX: CGFloat = 0.393
+            let yearX: CGFloat = 0.563
+            add(String(format: "%02d", index % 12 + 1), x: monthX, y: skewedY(monthX))
+            add(String(2035 + index / 12), x: yearX, y: skewedY(yearX), width: 0.035)
+            if !missingCodeRows.contains(index) {
+                let codeX: CGFloat = 0.690
+                add(String(format: "%03d", (index * 7) % 1000), x: codeX, y: skewedY(codeX))
+            }
+            let balanceX: CGFloat = 0.807
+            add(String(format: "%.2f", Double(index + 1) * 12.5), x: balanceX, y: skewedY(balanceX), width: 0.045)
+            let updatedX: CGFloat = 0.925
+            add("10/24/2026", x: updatedX, y: skewedY(updatedX), width: 0.055)
+        }
+        return fragments
     }
 }
