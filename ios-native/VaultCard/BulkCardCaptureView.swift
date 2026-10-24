@@ -59,7 +59,9 @@ struct BulkCardCaptureView: View {
                         .accessibilityIdentifier("bulk.recognition.progress")
                     }
 
-                    reviewSection
+                    if !rows.isEmpty {
+                        reviewSection
+                    }
                     if !rows.isEmpty {
                         DisclosureGroup("Add another image or file") {
                             captureOptions
@@ -73,11 +75,12 @@ struct BulkCardCaptureView: View {
                         .frame(maxWidth: .infinity)
                         .multilineTextAlignment(.center)
                         .padding(.top, 2)
+                        .accessibilityIdentifier("bulk.privacy.footer")
                 }
                 .padding(20)
-                .padding(.bottom, 18)
             }
-            .vaultFloatingBarScrollClearance()
+            .accessibilityIdentifier("bulk.scroll")
+            .scrollBounceBehavior(.basedOnSize)
 
             if isPrivacyShieldVisible {
                 Rectangle()
@@ -160,7 +163,7 @@ struct BulkCardCaptureView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Capture or import card details")
                 .font(.system(.title3, design: .rounded, weight: .bold))
-            Text("For a spreadsheet, use one card per row with columns Number • Expiry • CVV/PIN. Leave the last column blank if you need to add the CVV later.")
+            Text("Take a photo or import a spreadsheet with card numbers, expiry dates, and optional CVV/PIN. Extra columns are ignored.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }

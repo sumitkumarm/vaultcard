@@ -289,6 +289,45 @@ final class VaultCardUITests: XCTestCase {
         XCTAssertFalse(app.buttons["detail.addCVV"].exists)
     }
 
+    func testEmptyBulkCaptureFitsWithoutScrolling() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launch()
+        completeOnboardingIfNeeded(app)
+
+        let addButton = app.buttons["cards.add"].firstMatch
+        XCTAssertTrue(addButton.waitForExistence(timeout: 5))
+        addButton.tap()
+        let bulkButton = app.buttons["add.bulk"]
+        XCTAssertTrue(bulkButton.waitForExistence(timeout: 5))
+        bulkButton.tap()
+
+        let scroll = app.scrollViews["bulk.scroll"]
+        let firstCaptureOption = app.buttons["bulk.capture.camera"]
+        let privacyFooter = app.descendants(matching: .any)["bulk.privacy.footer"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
+        XCTAssertTrue(firstCaptureOption.waitForExistence(timeout: 5))
+        XCTAssertTrue(privacyFooter.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["No cards yet"].exists)
+        XCTAssertFalse(app.buttons["bulk.confirm"].exists)
+        XCTAssertTrue(firstCaptureOption.isHittable)
+        XCTAssertTrue(privacyFooter.isHittable)
+        XCTAssertGreaterThanOrEqual(firstCaptureOption.frame.minY, scroll.frame.minY - 1)
+        XCTAssertLessThanOrEqual(privacyFooter.frame.maxY, scroll.frame.maxY + 1)
+
+        let captureTopBeforeSwipe = firstCaptureOption.frame.minY
+        let privacyBottomBeforeSwipe = privacyFooter.frame.maxY
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Empty bulk capture"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        scroll.swipeUp()
+
+        XCTAssertEqual(firstCaptureOption.frame.minY, captureTopBeforeSwipe, accuracy: 1)
+        XCTAssertEqual(privacyFooter.frame.maxY, privacyBottomBeforeSwipe, accuracy: 1)
+    }
+
     private func completeOnboardingIfNeeded(_ app: XCUIApplication) {
         let primary = app.buttons["onboarding.primary"]
         if primary.waitForExistence(timeout: 3) {
