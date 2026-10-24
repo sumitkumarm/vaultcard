@@ -712,6 +712,7 @@ final class SwiftDataCardRepository: CardRepository {
             try context.save()
             return cardID
         } catch {
+            context.rollback()
             try? credentialStore.delete(cardID: cardID)
             throw error
         }
@@ -1674,10 +1675,10 @@ final class AppModel {
         saveSettings()
     }
 
-    func addCard(_ input: CardInput) throws -> String {
+    func addCard(_ input: CardInput, allowMissingCVV: Bool = false) throws -> String {
         guard CardRules.isValidCardNumber(input.cardNumber) else { throw VaultError.validation("Enter a valid Visa or Mastercard number.") }
         guard CardRules.validateExpiry(input.expiry) else { throw VaultError.validation("Use MM/YY.") }
-        guard CardRules.validateCVV(input.cvv) else { throw VaultError.validation("Enter a valid CVV.") }
+        guard (allowMissingCVV && input.cvv.isEmpty) || CardRules.validateCVV(input.cvv) else { throw VaultError.validation("Enter a valid CVV.") }
         var resolvedInput = input
         let defaultSuggestion = CardRules.suggestedNickname(for: input.cardNumber)
         let trimmedNickname = input.nickname?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1688,6 +1689,33 @@ final class AppModel {
         let id = try environment.cardRepository.addCard(resolvedInput)
         reloadCards()
         return id
+    }
+
+    func addBulkCards(_ inputs: [CardInput]) throws -> [String] {
+        // Validate the entire review before writing any card.
+        for input in inputs {
+            guard CardRules.isValidCardNumber(input.cardNumber), CardRules.validateExpiry(input.expiry),
+                  input.cvv.isEmpty || CardRules.validateCVV(input.cvv),
+                  input.pin.isEmpty || (input.pin.count == 4 && input.pin.allSatisfy(\.isNumber)) else {
+                throw VaultError.validation("Review the card number, expiration, and CVV / PIN for every row.")
+            }
+        }
+        var savedIDs: [String] = []
+        do {
+            for input in inputs { savedIDs.append(try addCard(input, allowMissingCVV: true)) }
+            return savedIDs
+        } catch {
+            reloadCards()
+            throw BulkCardSaveError(savedIDs: savedIDs, underlying: error)
+        }
+    }
+
+    func saveCVV(_ cvv: String, cardID: String) async throws {
+        guard CardRules.validateCVV(cvv) else { throw VaultError.validation("Enter a 3 or 4 digit CVV.") }
+        var credentials = try await revealCardCredentials(id: cardID)
+        credentials.cvv = cvv
+        try environment.cardRepository.updateCredentials(cardID: cardID, credentials: credentials)
+        reloadCards()
     }
 
     var isShowingVault: Bool { routePath.isEmpty }
@@ -1707,7 +1735,7 @@ final class AppModel {
     var isShowingAddFlow: Bool {
         guard let first = routePath.first else { return false }
         switch first {
-        case .add, .manualEntry, .scan: return true
+        case .add, .manualEntry, .scan, .bulkCapture: return true
         default: return false
         }
     }
@@ -1851,6 +1879,7 @@ enum Route: Hashable {
     case add
     case manualEntry(prefill: ScanCandidate?)
     case scan
+    case bulkCapture
     case detail(String)
     case giftCardMall(String)
     case archived
@@ -1944,6 +1973,7 @@ struct RootView: View {
                             case .add: AddCardChoiceView()
                             case .manualEntry(let prefill): ManualCardEntryView(prefill: prefill)
                             case .scan: ScanCardView()
+                            case .bulkCapture: BulkCardCaptureView()
                             case .detail(let id): CardDetailView(cardID: id)
                             case .giftCardMall(let id): GiftCardMallRefreshView(cardID: id)
                             case .archived: ArchivedCardsView()
@@ -1953,7 +1983,7 @@ struct RootView: View {
                         }
                 }
                 .vaultFloatingBar {
-                    floatingBar
+                    if model.routePath.last != .bulkCapture { floatingBar }
                 }
             } else {
                 OnboardingView()
@@ -3137,6 +3167,8 @@ struct AddCardChoiceView: View {
                         }
                     }
 
+                    BulkCardEntryButton()
+
                     Label("Your card data stays on your device.", systemImage: "lock.fill")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -3202,6 +3234,7 @@ struct ManualCardEntryView: View {
                             .foregroundStyle(VaultTheme.success)
                             .accessibilityIdentifier("scan.confirmation.summary")
                     }
+                    BulkCardEntryButton()
                     manualFields
 
                     if let errorMessage {
@@ -3391,6 +3424,8 @@ struct ScanCardView: View {
                         }
                         .buttonStyle(.bordered)
                         .accessibilityIdentifier("scan.enterManually")
+
+                        BulkCardEntryButton()
 
                         if hasCandidate {
                             detectedDetailsEditor
@@ -3860,6 +3895,8 @@ struct CardDetailView: View {
     @State private var revealedCredentials: CardCredentials?
     @State private var hideTask: Task<Void, Never>?
     @State private var confirmDelete = false
+    @State private var showCVVEditor = false
+    @State private var needsCVV = false
 
     var card: VaultCard? { model.cards.first { $0.id == cardID } }
 
@@ -3910,6 +3947,10 @@ struct CardDetailView: View {
                 clearReveal()
             }
         }
+        .task { needsCVV = (try? await model.credentialsForAutofill(id: cardID).cvv.isEmpty) ?? false }
+        .sheet(isPresented: $showCVVEditor) {
+            AddMissingCVVView(cardID: cardID) { needsCVV = false }
+        }
         .onDisappear { clearReveal() }
     }
 
@@ -3920,6 +3961,15 @@ struct CardDetailView: View {
                 revealedCredentials: revealedCredentials,
                 usesDetailedMask: true
             )
+            if needsCVV {
+                Button { showCVVEditor = true } label: {
+                    Label("Add CVV to manage this card", systemImage: "creditcard.trianglebadge.exclamationmark")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("detail.addCVV")
+            }
             topActions(card)
             failureBanner(card)
             transactionPanel(card)
@@ -3971,7 +4021,8 @@ struct CardDetailView: View {
                     systemImage: "arrow.clockwise",
                     identifier: "detail.refresh"
                 ) {
-                    model.routePath.append(.giftCardMall(cardID))
+                    if needsCVV { showCVVEditor = true }
+                    else { model.routePath.append(.giftCardMall(cardID)) }
                 }
             }
             Label(

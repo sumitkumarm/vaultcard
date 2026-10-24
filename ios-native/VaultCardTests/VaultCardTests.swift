@@ -595,6 +595,56 @@ final class VaultCardTests: XCTestCase {
         XCTAssertEqual(credentials.cardNumber, "4111111111111111")
     }
 
+    func testBulkSaveAllowsMissingCVVAndCanCompleteItLater() async throws {
+        let environment = try AppEnvironment.uiTesting()
+        let model = AppModel(environment: environment)
+        let ids = try model.addBulkCards([
+            CardInput(cardNumber: "4111111111111111", expiry: "05/26", cvv: "123"),
+            CardInput(cardNumber: "5555555555554444", expiry: "08/28", cvv: "", pin: "0123")
+        ])
+        XCTAssertEqual(model.cards.count, 2)
+        XCTAssertEqual(try environment.cardRepository.getCredentials(cardID: ids[1]).pin, "0123")
+        XCTAssertEqual(try environment.cardRepository.getCredentials(cardID: ids[1]).cvv, "")
+        try await model.saveCVV("456", cardID: ids[1])
+        let updated = try environment.cardRepository.getCredentials(cardID: ids[1])
+        XCTAssertEqual(updated.cvv, "456")
+        XCTAssertEqual(updated.pin, "0123")
+    }
+
+    func testBulkSaveValidatesAllRowsBeforeWriting() throws {
+        let environment = try AppEnvironment.uiTesting()
+        let model = AppModel(environment: environment)
+        XCTAssertThrowsError(try model.addBulkCards([
+            validInput(), CardInput(cardNumber: "4111111111111112", expiry: "08/28", cvv: "")
+        ]))
+        XCTAssertTrue(try environment.cardRepository.getCards().isEmpty)
+    }
+
+    func testBulkSaveReportsPartialSuccessAndRollsBackFailedMetadata() throws {
+        let container = try ModelContainerFactory.makeInMemory()
+        let store = FakeCredentialStore()
+        var saveCount = 0
+        let repository = SwiftDataCardRepository(context: ModelContext(container), credentialStore: store,
+            beforeMetadataSave: {
+                saveCount += 1
+                if saveCount == 2 { throw VaultError.validation("Storage unavailable") }
+            })
+        let environment = AppEnvironment(cardRepository: repository,
+            settingsRepository: InMemorySettingsRepository(), biometricService: AlwaysAllowAuthenticationService(),
+            notificationService: NoopNotificationService(), scanner: StaticCardScanner())
+        let model = AppModel(environment: environment)
+        do {
+            _ = try model.addBulkCards([validInput(), validInput()])
+            XCTFail("Expected second save to fail")
+        } catch let error as BulkCardSaveError {
+            XCTAssertEqual(error.savedIDs.count, 1)
+        }
+        XCTAssertEqual(try repository.getCards().count, 1)
+        XCTAssertEqual(store.records.count, 1)
+        _ = try model.addBulkCards([validInput()])
+        XCTAssertEqual(try repository.getCards().count, 2)
+    }
+
     private func validInput(nickname: String = "Test") -> CardInput {
         CardInput(cardNumber: "4111111111111111", expiry: "09/29", cvv: "123", nickname: nickname)
     }

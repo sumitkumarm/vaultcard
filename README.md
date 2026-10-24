@@ -8,6 +8,7 @@ The native iOS app currently includes:
 
 - adaptive light/midnight-blue SwiftUI design with iOS 26 Liquid Glass controls and iOS 17 material fallbacks
 - camera scanning with explicit card number, expiration, and CVV confirmation
+- bulk card capture from grid photos, uploaded images, CSV/TSV files, or pasted rows, with editable review and one-tap saving
 - Keychain-backed credentials with authenticated full-number and CVV reveal
 - user-initiated GiftCardMall balance checks in a secure embedded browser
 - WebKit capture of confirmed balances and transactions back into the local vault
@@ -42,3 +43,16 @@ flutter test
 - Parser config is local for MVP but accessed through an interface so it can move to remote config later.
 - Telemetry is intentionally no-op by default.
 - GiftCardMall checks are foreground-only: Check Balance opens the embedded site directly, autofills saved credentials, and persists confirmed balances and transactions immediately.
+
+## Bulk card capture
+
+Choose **Add Multiple Cards** from the add-card flow. Photograph a grid, select photos,
+import an image or delimited text file, or paste spreadsheet rows. Columns should be
+card number, expiry (one column or separate month and year), then optional CVV/PIN.
+English month names and abbreviations are case insensitive; numeric months and
+2- or 4-digit years (including apostrophe-prefixed years) are supported. A PIN header
+selects PIN automatically; each reviewed row can also switch its code to PIN.
+
+Review and correct every captured row, remove unwanted rows, then tap **Confirm & Add**.
+Missing CVVs do not prevent saving. Open the saved card and choose **Add CVV** before
+managing its balance. Recognition runs locally; credentials use the existing secure store.
