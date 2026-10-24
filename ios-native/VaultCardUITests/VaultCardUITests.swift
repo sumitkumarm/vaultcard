@@ -251,6 +251,44 @@ final class VaultCardUITests: XCTestCase {
         add(attachment)
     }
 
+    func testBulkReviewAddsAllCardsAndCompletesMissingCVV() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-bulk"]
+        app.launch()
+        completeOnboardingIfNeeded(app)
+        app.buttons["cards.add"].firstMatch.tap()
+        let bulk = app.buttons["add.bulk"]
+        for _ in 0..<3 where !bulk.isHittable { app.scrollViews.firstMatch.swipeUp() }
+        XCTAssertTrue(bulk.waitForExistence(timeout: 5))
+        bulk.tap()
+        let confirm = app.buttons["bulk.confirm"]
+        for _ in 0..<5 where !confirm.isHittable { app.scrollViews.firstMatch.swipeUp() }
+        XCTAssertTrue(confirm.isEnabled)
+        XCTAssertEqual(confirm.label, "Confirm & Add 2 Cards")
+        let beforeSave = XCTAttachment(screenshot: app.screenshot())
+        beforeSave.name = "Bulk card review with optional CVV"
+        beforeSave.lifetime = .keepAlways
+        add(beforeSave)
+        confirm.tap()
+        XCTAssertTrue(app.navigationBars["Vault"].waitForExistence(timeout: 5))
+        let expand = app.buttons["cards.stack.expand"]
+        if expand.waitForExistence(timeout: 3), expand.isHittable { expand.tap() }
+        let missingCodeCard = app.buttons["card.row.4444"]
+        for _ in 0..<3 where !missingCodeCard.isHittable { app.scrollViews.firstMatch.swipeUp() }
+        XCTAssertTrue(missingCodeCard.waitForExistence(timeout: 5))
+        missingCodeCard.tap()
+        let addCVV = app.buttons["detail.addCVV"]
+        XCTAssertTrue(addCVV.waitForExistence(timeout: 5))
+        addCVV.tap()
+        let code = app.secureTextFields["missingCVV.value"]
+        XCTAssertTrue(code.waitForExistence(timeout: 5))
+        code.tap()
+        code.typeText("456")
+        app.buttons["missingCVV.save"].tap()
+        XCTAssertTrue(app.buttons["detail.refresh"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["detail.addCVV"].exists)
+    }
+
     private func completeOnboardingIfNeeded(_ app: XCUIApplication) {
         let primary = app.buttons["onboarding.primary"]
         if primary.waitForExistence(timeout: 3) {
