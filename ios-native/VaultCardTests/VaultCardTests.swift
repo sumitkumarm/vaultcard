@@ -62,6 +62,12 @@ final class VaultCardTests: XCTestCase {
 
         let script = GiftCardMallBridge.autofillScript(credentials: credentials)
         XCTAssertTrue(script.contains("setTimeout(fill"))
+        XCTAssertTrue(script.contains("'#credit-card-number'"))
+        XCTAssertTrue(script.contains("'#expiration_month'"))
+        XCTAssertTrue(script.contains("'#expiration_year'"))
+        XCTAssertTrue(script.contains("'#credit-card-code'"))
+        XCTAssertTrue(script.contains("input[name=\"cvv\"]"))
+        XCTAssertTrue(script.contains("input[placeholder=\"EnterCode\"]"))
         XCTAssertTrue(script.contains("\"29\""))
         XCTAssertFalse(script.contains("\"2029\""))
     }
@@ -496,13 +502,13 @@ final class VaultCardTests: XCTestCase {
     }
 
     func testGiftCardMallBridgeRejectsUntrustedHostAndParsesFixture() throws {
-        let trustedURL = URL(string: "https://mygift.giftcardmall.com/")!
+        let trustedURL = URL(string: "https://www.mycardwallet.com/chs/mygift/")!
         let untrustedURL = URL(string: "https://example.com/")!
         let message: [String: Any] = [
             "namespace": GiftCardMallBridge.handlerName,
             "parserVersion": GiftCardMallBridge.parserVersion,
             "kind": "networkCapture",
-            "pageHost": "mygift.giftcardmall.com",
+            "pageHost": "www.mycardwallet.com",
             "url": "/api/card/getCardBalanceSummary",
             "requestBody": #"{"rmsSessionId":"session-1"}"#,
             "responseBody": #"{"success":true,"access_token":"token-1","result":{"balances":{"closingBalance":42.5,"currencyCode":"USD"}}}"#,
@@ -512,6 +518,70 @@ final class VaultCardTests: XCTestCase {
         let summary = try XCTUnwrap(GiftCardMallBridge.parseSummary(message, sourceURL: trustedURL))
         XCTAssertEqual(summary.balance, 42.5)
         XCTAssertEqual(summary.currencyCode, "USD")
+    }
+
+    func testBalancePortalRoutesMatchCardNetwork() {
+        XCTAssertEqual(GiftCardMallBridge.balanceURL(for: .visa).absoluteString, "https://www.mycardwallet.com/chs/mygift/")
+        let mastercard = GiftCardMallBridge.balanceURL(for: .mastercard)
+        XCTAssertEqual(mastercard.absoluteString, "https://www.mycardwallet.com/chs/mcgift/")
+        XCTAssertTrue(GiftCardMallBridge.isAllowed(mastercard))
+        XCTAssertFalse(GiftCardMallBridge.isAllowed(URL(string: "https://www.mycardwallet.com/chs/mcgift-lookalike/")!))
+    }
+
+    func testGiftCardMallBridgeTrustsOnlyHTTPSCanonicalRedirectRouteAndMainFrameOrigin() {
+        let canonicalURL = URL(string: "https://www.mycardwallet.com/chs/mygift/")!
+        let nestedPortalURL = URL(string: "https://www.mycardwallet.com/chs/mygift/cards/123")!
+        let legacyURL = URL(string: "https://mygift.giftcardmall.com/")!
+
+        XCTAssertTrue(GiftCardMallBridge.isAllowed(canonicalURL))
+        XCTAssertTrue(GiftCardMallBridge.isAllowed(nestedPortalURL))
+        XCTAssertTrue(GiftCardMallBridge.isAllowed(legacyURL))
+        XCTAssertTrue(GiftCardMallBridge.isTrustedMainFrame(
+            isMainFrame: true,
+            scheme: "https",
+            host: "www.mycardwallet.com",
+            port: 443,
+            pageURL: canonicalURL
+        ))
+
+        XCTAssertTrue(GiftCardMallBridge.isTrustedMainFrame(
+            isMainFrame: true, scheme: "https", host: "www.mycardwallet.com", port: 0, pageURL: canonicalURL
+        ))
+
+        XCTAssertFalse(GiftCardMallBridge.isAllowed(URL(string: "http://www.mycardwallet.com/chs/mygift/")!))
+        XCTAssertFalse(GiftCardMallBridge.isAllowed(URL(string: "https://mycardwallet.com/chs/mygift/")!))
+        XCTAssertFalse(GiftCardMallBridge.isAllowed(URL(string: "https://www.mycardwallet.com.evil.example/chs/mygift/")!))
+        XCTAssertFalse(GiftCardMallBridge.isAllowed(URL(string: "https://www.mycardwallet.com/")!))
+        XCTAssertFalse(GiftCardMallBridge.isAllowed(URL(string: "https://www.mycardwallet.com/chs/mygift-lookalike/")!))
+        XCTAssertFalse(GiftCardMallBridge.isAllowed(URL(string: "https://www.mycardwallet.com:8443/chs/mygift/")!))
+        XCTAssertFalse(GiftCardMallBridge.isTrustedMainFrame(
+            isMainFrame: true,
+            scheme: "http",
+            host: "www.mycardwallet.com",
+            port: 80,
+            pageURL: canonicalURL
+        ))
+        XCTAssertFalse(GiftCardMallBridge.isTrustedMainFrame(
+            isMainFrame: true,
+            scheme: "https",
+            host: "mycardwallet.com",
+            port: 443,
+            pageURL: canonicalURL
+        ))
+        XCTAssertFalse(GiftCardMallBridge.isTrustedMainFrame(
+            isMainFrame: true,
+            scheme: "https",
+            host: "www.mycardwallet.com",
+            port: 8443,
+            pageURL: canonicalURL
+        ))
+        XCTAssertFalse(GiftCardMallBridge.isTrustedMainFrame(
+            isMainFrame: false,
+            scheme: "https",
+            host: "www.mycardwallet.com",
+            port: 443,
+            pageURL: canonicalURL
+        ))
     }
 
     func testGiftCardMallBridgeCapturesDOMBalanceAndInstallsAllCapturePaths() throws {

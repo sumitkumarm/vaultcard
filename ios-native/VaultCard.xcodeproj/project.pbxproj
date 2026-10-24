@@ -17,6 +17,8 @@
 		111111111111111111111113 /* BulkCardCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111013 /* BulkCardCaptureView.swift */; };
 		111111111111111111111114 /* BulkCardSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111014 /* BulkCardSupport.swift */; };
 		111111111111111111111115 /* BulkCardParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111015 /* BulkCardParserTests.swift */; };
+		111111111111111111111116 /* VaultFundsSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111016 /* VaultFundsSummary.swift */; };
+		111111111111111111111117 /* VaultFundsSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111017 /* VaultFundsSummaryTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,6 +53,8 @@
 		111111111111111111111013 /* BulkCardCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkCardCaptureView.swift; sourceTree = "<group>"; };
 		111111111111111111111014 /* BulkCardSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkCardSupport.swift; sourceTree = "<group>"; };
 		111111111111111111111015 /* BulkCardParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkCardParserTests.swift; sourceTree = "<group>"; };
+		111111111111111111111016 /* VaultFundsSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultFundsSummary.swift; sourceTree = "<group>"; };
+		111111111111111111111017 /* VaultFundsSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultFundsSummaryTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -92,6 +96,7 @@
 			isa = PBXGroup;
 			children = (
 				111111111111111111111001 /* VaultCardApp.swift */,
+				111111111111111111111016 /* VaultFundsSummary.swift */,
 				111111111111111111111014 /* BulkCardSupport.swift */,
 				111111111111111111111013 /* BulkCardCaptureView.swift */,
 				111111111111111111111012 /* BulkCardParser.swift */,
@@ -107,6 +112,7 @@
 			isa = PBXGroup;
 			children = (
 				111111111111111111111003 /* VaultCardTests.swift */,
+				111111111111111111111017 /* VaultFundsSummaryTests.swift */,
 				111111111111111111111015 /* BulkCardParserTests.swift */,
 			);
 			path = VaultCardTests;
@@ -260,6 +266,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				111111111111111111111101 /* VaultCardApp.swift in Sources */,
+				111111111111111111111116 /* VaultFundsSummary.swift in Sources */,
 				111111111111111111111114 /* BulkCardSupport.swift in Sources */,
 				111111111111111111111113 /* BulkCardCaptureView.swift in Sources */,
 				111111111111111111111112 /* BulkCardParser.swift in Sources */,
@@ -273,6 +280,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				111111111111111111111103 /* VaultCardTests.swift in Sources */,
+				111111111111111111111117 /* VaultFundsSummaryTests.swift in Sources */,
 				111111111111111111111115 /* BulkCardParserTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

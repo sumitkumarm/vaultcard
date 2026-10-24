@@ -10,7 +10,8 @@ The native iOS app currently includes:
 - camera scanning with explicit card number, expiration, and CVV confirmation
 - bulk card capture from grid photos, uploaded images, CSV/TSV files, or pasted rows, with editable review and one-tap saving
 - Keychain-backed credentials with authenticated full-number and CVV reveal
-- user-initiated GiftCardMall balance checks in a secure embedded browser
+- home-screen unused funds total across active cards, with unknown and stale balance indicators
+- user-initiated Visa/MyGift and Mastercard balance checks on the current MyCardWallet portals
 - WebKit capture of confirmed balances and transactions back into the local vault
 - SwiftData metadata storage plus unit and Simulator UI coverage
 
