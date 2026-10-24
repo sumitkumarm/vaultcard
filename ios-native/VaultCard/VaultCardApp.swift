@@ -957,12 +957,41 @@ struct GiftCardMallSummaryCapture: Equatable {
 enum GiftCardMallBridge {
     static let handlerName = "vaultcardGiftCardMallBridge"
     static let parserVersion = 1
-    static let allowedHosts: Set<String> = ["mygift.giftcardmall.com", "www.mygift.giftcardmall.com"]
-    static let siteURL = URL(string: "https://mygift.giftcardmall.com/")!
+    static let allowedHosts: Set<String> = [
+        "mygift.giftcardmall.com",
+        "www.mygift.giftcardmall.com",
+        "mcgift.giftcardmall.com",
+        "www.mycardwallet.com"
+    ]
+    private static let legacyHosts: Set<String> = ["mygift.giftcardmall.com", "www.mygift.giftcardmall.com", "mcgift.giftcardmall.com"]
+    static let siteURL = URL(string: "https://www.mycardwallet.com/chs/mygift/")!
+
+    static func balanceURL(for network: CardNetwork) -> URL {
+        network == .mastercard ? URL(string: "https://www.mycardwallet.com/chs/mcgift/")! : siteURL
+    }
 
     static func isAllowed(_ url: URL?) -> Bool {
-        guard let host = url?.host?.lowercased() else { return false }
-        return allowedHosts.contains(host)
+        guard let url,
+              url.scheme?.lowercased() == "https",
+              url.user == nil,
+              url.password == nil,
+              url.port == nil || url.port == 443,
+              let host = url.host?.lowercased(),
+              allowedHosts.contains(host)
+        else { return false }
+
+        if legacyHosts.contains(host) { return true }
+        let path = url.path
+        return ["/chs/mygift", "/chs/mcgift"].contains { path == $0 || path.hasPrefix($0 + "/") }
+    }
+
+    static func isTrustedMainFrame(isMainFrame: Bool, scheme: String?, host: String?, port: Int, pageURL: URL?) -> Bool {
+        guard isMainFrame,
+              isAllowed(pageURL),
+              scheme?.lowercased() == "https",
+              host?.lowercased() == pageURL?.host?.lowercased()
+        else { return false }
+        return (port == 0 ? 443 : port) == (pageURL?.port ?? 443)
     }
 
     static func installScript() -> String {
@@ -977,12 +1006,13 @@ enum GiftCardMallBridge {
               handler.postMessage(Object.assign({
                 namespace: '\(handlerName)',
                 parserVersion: \(parserVersion),
-                pageHost: window.location.host
+                pageHost: window.location.hostname
               }, payload));
             } catch (_) {}
           };
 
           const cardSelectors = [
+            '#credit-card-number',
             'input[name="cardNumber"]',
             'input[id*="cardNumber"]',
             'input[autocomplete="cc-number"]',
@@ -1121,10 +1151,10 @@ enum GiftCardMallBridge {
             return false;
           };
           const fill = () => {
-            setValue(['input[name="cardNumber"]','input[id*="cardNumber"]','input[autocomplete="cc-number"]','input[inputmode="numeric"]'], \(number));
-            setValue(['input[name="expirationMonth"]','input[id*="expirationMonth"]','select[name="expirationMonth"]','input[name="expMonth"]'], \(month));
-            setValue(['input[name="expirationYear"]','input[id*="expirationYear"]','select[name="expirationYear"]','input[name="expYear"]'], \(year));
-            setValue(['input[name="securityCode"]','input[id*="securityCode"]','input[name="cvv"]','input[id*="cvv"]','input[autocomplete="cc-csc"]'], \(cvv));
+            setValue(['#credit-card-number','input[name="cardNumber"]','input[id*="cardNumber"]','input[autocomplete="cc-number"]','input[inputmode="numeric"]'], \(number));
+            setValue(['#expiration_month','input[name="expirationMonth"]','input[id*="expirationMonth"]','select[name="expirationMonth"]','input[name="expMonth"]'], \(month));
+            setValue(['#expiration_year','input[name="expirationYear"]','input[id*="expirationYear"]','select[name="expirationYear"]','input[name="expYear"]'], \(year));
+            setValue(['#credit-card-code','input[name="cvv"]','input[placeholder="EnterCode"]','input[name="securityCode"]','input[id*="securityCode"]','input[id*="cvv"]','input[autocomplete="cc-csc"]'], \(cvv));
             if (window.__vaultCardScrollToForm) { window.__vaultCardScrollToForm(true); }
           };
           fill();
@@ -1147,7 +1177,8 @@ enum GiftCardMallBridge {
               payload["namespace"] as? String == handlerName,
               payload["parserVersion"] as? Int == parserVersion,
               let pageHost = payload["pageHost"] as? String,
-              allowedHosts.contains(pageHost.lowercased())
+              allowedHosts.contains(pageHost.lowercased()),
+              pageHost.caseInsensitiveCompare(sourceURL?.host ?? "") == .orderedSame
         else { return nil }
 
         if payload["kind"] as? String == "domBalance" {
@@ -1191,6 +1222,9 @@ enum GiftCardMallBridge {
               let payload = body as? [String: Any],
               payload["namespace"] as? String == handlerName,
               payload["parserVersion"] as? Int == parserVersion,
+              let pageHost = payload["pageHost"] as? String,
+              allowedHosts.contains(pageHost.lowercased()),
+              pageHost.caseInsensitiveCompare(sourceURL?.host ?? "") == .orderedSame,
               payload["kind"] as? String == "networkCapture",
               let url = payload["url"] as? String,
               url.contains("/api/card/getCardTransactions"),
@@ -1983,7 +2017,7 @@ struct RootView: View {
                         }
                 }
                 .vaultFloatingBar {
-                    if model.routePath.last != .bulkCapture { floatingBar }
+                    if shouldShowFloatingBar { floatingBar }
                 }
             } else {
                 OnboardingView()
@@ -2005,6 +2039,13 @@ struct RootView: View {
             } else if phase == .active {
                 Task { await model.unlockIfNeeded() }
             }
+        }
+    }
+
+    private var shouldShowFloatingBar: Bool {
+        switch model.routePath.last {
+        case .bulkCapture?, .giftCardMall?: return false
+        default: return true
         }
     }
 
@@ -2207,6 +2248,8 @@ struct CardListView: View {
         ZStack {
             VaultBackground()
             List {
+                VaultFundsSummaryView(cards: model.cards)
+                    .cardListRowStyle(verticalPadding: 8)
                 searchRow
                 filterRow
 
@@ -4129,6 +4172,7 @@ struct GiftCardMallRefreshView: View {
     @State private var isPreparingAutofill = false
     @State private var isBrowserReady = false
     @State private var preparationError: String?
+    @State private var pageLoadFailed = false
 
     var body: some View {
         ZStack {
@@ -4136,7 +4180,11 @@ struct GiftCardMallRefreshView: View {
             if isBrowserReady {
                 GiftCardMallWebView(
                     credentials: credentials,
-                    onLoadingChange: { isPageLoading = $0 }
+                    onLoadingChange: { isLoading in
+                        isPageLoading = isLoading
+                        if isLoading { pageLoadFailed = false }
+                    },
+                    onNavigationError: { pageLoadFailed = $0 }
                 ) { body, url in
                     do {
                         if let captured = try GiftCardMallBridge.parseSummary(body, sourceURL: url) {
@@ -4172,9 +4220,31 @@ struct GiftCardMallRefreshView: View {
                     .padding(16)
                     .vaultGlass(cornerRadius: 18)
             } else if isBrowserReady && isPageLoading {
-                ProgressView("Loading GiftCardMall…")
+                ProgressView("Loading balance page…")
                     .padding(16)
                     .vaultGlass(cornerRadius: 18)
+            }
+            if isBrowserReady && pageLoadFailed {
+                VStack {
+                    VStack(spacing: 8) {
+                        Label("Balance page couldn’t be loaded", systemImage: "exclamationmark.triangle.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Check your connection and try again.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button("Retry", action: reloadPage)
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .accessibilityIdentifier("balance.retry")
+                    }
+                    .padding(14)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+                    Spacer(minLength: 0)
+                }
             }
         }
         .navigationTitle("Check Balance")
@@ -4193,7 +4263,7 @@ struct GiftCardMallRefreshView: View {
                 .disabled(credentials == nil || isPreparingAutofill || !isBrowserReady)
 
                 Button {
-                    NotificationCenter.default.post(name: .giftCardMallReload, object: nil)
+                    reloadPage()
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -4201,6 +4271,12 @@ struct GiftCardMallRefreshView: View {
                 .disabled(!isBrowserReady)
             }
         }
+    }
+
+    private func reloadPage() {
+        pageLoadFailed = false
+        isPageLoading = true
+        NotificationCenter.default.post(name: .giftCardMallReload, object: nil)
     }
 
     private func prepareBrowserAfterTransition() async {
@@ -4229,16 +4305,21 @@ extension Notification.Name {
 struct GiftCardMallWebView: UIViewRepresentable {
     var credentials: CardCredentials?
     var onLoadingChange: (Bool) -> Void
+    var onNavigationError: (Bool) -> Void
     var onMessage: (Any, URL?) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onLoadingChange: onLoadingChange, onMessage: onMessage)
+        Coordinator(onLoadingChange: onLoadingChange, onNavigationError: onNavigationError, onMessage: onMessage)
     }
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.userContentController.add(context.coordinator, name: GiftCardMallBridge.handlerName)
+        let readyScript = GiftCardMallBridge.installScript() + "\nwindow.webkit.messageHandlers." + GiftCardMallBridge.handlerName + ".postMessage({kind: 'vaultcardPageReady'});"
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: readyScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true
+        ))
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.isOpaque = false
         webView.backgroundColor = .clear
@@ -4249,13 +4330,25 @@ struct GiftCardMallWebView: UIViewRepresentable {
         webView.scrollView.keyboardDismissMode = .interactive
         context.coordinator.webView = webView
         context.coordinator.updateCredentials(credentials)
-        webView.load(URLRequest(url: GiftCardMallBridge.siteURL))
+        let network = credentials.map { CardRules.inferNetwork($0.cardNumber) } ?? .unknown
+        let loadRequest = URLRequest(url: GiftCardMallBridge.balanceURL(for: network), timeoutInterval: 30)
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--ui-testing") && arguments.contains("--ui-testing-web-failure") {
+            let coordinator = context.coordinator
+            DispatchQueue.main.async {
+                coordinator.onLoadingChange(false)
+                coordinator.onNavigationError(true)
+            }
+        } else {
+            webView.load(loadRequest)
+        }
         context.coordinator.installObservers()
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.onLoadingChange = onLoadingChange
+        context.coordinator.onNavigationError = onNavigationError
         context.coordinator.onMessage = onMessage
         context.coordinator.updateCredentials(credentials)
     }
@@ -4267,40 +4360,70 @@ struct GiftCardMallWebView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var onLoadingChange: (Bool) -> Void
+        var onNavigationError: (Bool) -> Void
         var onMessage: (Any, URL?) -> Void
         weak var webView: WKWebView?
         private var tokens: [NSObjectProtocol] = []
         private var credentials: CardCredentials?
         private var lastAppliedCredentials: CardCredentials?
         private var pageReady = false
+        private var navigationTimeout: DispatchWorkItem?
 
-        init(onLoadingChange: @escaping (Bool) -> Void, onMessage: @escaping (Any, URL?) -> Void) {
+        init(onLoadingChange: @escaping (Bool) -> Void, onNavigationError: @escaping (Bool) -> Void, onMessage: @escaping (Any, URL?) -> Void) {
             self.onLoadingChange = onLoadingChange
+            self.onNavigationError = onNavigationError
             self.onMessage = onMessage
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            cancelNavigationTimeout()
             pageReady = false
             lastAppliedCredentials = nil
+            onNavigationError(false)
             onLoadingChange(true)
+            let timeout = DispatchWorkItem { [weak self, weak webView] in
+                guard let self, let webView, webView.isLoading else { return }
+                self.navigationTimeout = nil
+                self.pageReady = false
+                self.onLoadingChange(false)
+                self.onNavigationError(true)
+                webView.stopLoading()
+            }
+            navigationTimeout = timeout
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            guard GiftCardMallBridge.isAllowed(webView.url) else { return }
+            cancelNavigationTimeout()
+            guard GiftCardMallBridge.isAllowed(webView.url) else {
+                pageReady = false
+                onLoadingChange(false)
+                onNavigationError(true)
+                return
+            }
             webView.evaluateJavaScript(GiftCardMallBridge.installScript()) { [weak self] _, _ in
                 guard let self else { return }
                 self.pageReady = true
                 self.onLoadingChange(false)
+                self.onNavigationError(false)
                 self.applyAutofillIfReady()
             }
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            cancelNavigationTimeout()
+            guard !isNavigationCancellation(error) else { return }
+            pageReady = false
             onLoadingChange(false)
+            onNavigationError(true)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            cancelNavigationTimeout()
+            guard !isNavigationCancellation(error) else { return }
+            pageReady = false
             onLoadingChange(false)
+            onNavigationError(true)
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -4312,14 +4435,55 @@ struct GiftCardMallWebView: UIViewRepresentable {
             }
             guard GiftCardMallBridge.isAllowed(navigationAction.request.url) else {
                 decisionHandler(.cancel)
+                onLoadingChange(false)
+                onNavigationError(true)
+                return
+            }
+            decisionHandler(.allow)
+        }
+
+        func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+            guard navigationResponse.isForMainFrame else {
+                decisionHandler(.allow)
+                return
+            }
+            guard GiftCardMallBridge.isAllowed(navigationResponse.response.url) else {
+                decisionHandler(.cancel)
+                onLoadingChange(false)
+                onNavigationError(true)
+                return
+            }
+            if let response = navigationResponse.response as? HTTPURLResponse,
+               !(200..<400).contains(response.statusCode) {
+                decisionHandler(.cancel)
+                onLoadingChange(false)
+                onNavigationError(true)
                 return
             }
             decisionHandler(.allow)
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.name == GiftCardMallBridge.handlerName else { return }
-            onMessage(message.body, webView?.url)
+            guard message.name == GiftCardMallBridge.handlerName,
+                  message.frameInfo.isMainFrame,
+                  let pageURL = webView?.url,
+                  GiftCardMallBridge.isTrustedMainFrame(
+                    isMainFrame: message.frameInfo.isMainFrame,
+                    scheme: message.frameInfo.securityOrigin.protocol,
+                    host: message.frameInfo.securityOrigin.host,
+                    port: message.frameInfo.securityOrigin.port,
+                    pageURL: pageURL
+                  )
+            else { return }
+            if let payload = message.body as? [String: Any], payload["kind"] as? String == "vaultcardPageReady" {
+                cancelNavigationTimeout()
+                pageReady = true
+                onLoadingChange(false)
+                onNavigationError(false)
+                applyAutofillIfReady()
+                return
+            }
+            onMessage(message.body, pageURL)
         }
 
         func installObservers() {
@@ -4329,11 +4493,14 @@ struct GiftCardMallWebView: UIViewRepresentable {
                 self?.updateCredentials(credentials)
             })
             tokens.append(NotificationCenter.default.addObserver(forName: .giftCardMallReload, object: nil, queue: .main) { [weak self] _ in
-                self?.webView?.reload()
+                guard let self, let webView = self.webView else { return }
+                let network = self.credentials.map { CardRules.inferNetwork($0.cardNumber) } ?? .unknown
+                webView.load(URLRequest(url: GiftCardMallBridge.balanceURL(for: network), timeoutInterval: 30))
             })
         }
 
         func removeObservers() {
+            cancelNavigationTimeout()
             tokens.forEach(NotificationCenter.default.removeObserver)
             tokens.removeAll()
         }
@@ -4355,6 +4522,16 @@ struct GiftCardMallWebView: UIViewRepresentable {
             else { return }
             lastAppliedCredentials = credentials
             webView.evaluateJavaScript(GiftCardMallBridge.autofillScript(credentials: credentials))
+        }
+
+        private func cancelNavigationTimeout() {
+            navigationTimeout?.cancel()
+            navigationTimeout = nil
+        }
+
+        private func isNavigationCancellation(_ error: Error) -> Bool {
+            let error = error as NSError
+            return error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled
         }
 
     }

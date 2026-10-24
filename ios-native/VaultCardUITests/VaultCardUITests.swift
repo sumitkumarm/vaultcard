@@ -261,6 +261,7 @@ final class VaultCardUITests: XCTestCase {
         for _ in 0..<3 where !bulk.isHittable { app.scrollViews.firstMatch.swipeUp() }
         XCTAssertTrue(bulk.waitForExistence(timeout: 5))
         bulk.tap()
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Card from row")).firstMatch.exists)
         let confirm = app.buttons["bulk.confirm"]
         for _ in 0..<5 where !confirm.isHittable { app.scrollViews.firstMatch.swipeUp() }
         XCTAssertTrue(confirm.isEnabled)
@@ -326,6 +327,48 @@ final class VaultCardUITests: XCTestCase {
 
         XCTAssertEqual(firstCaptureOption.frame.minY, captureTopBeforeSwipe, accuracy: 1)
         XCTAssertEqual(privacyFooter.frame.maxY, privacyBottomBeforeSwipe, accuracy: 1)
+    }
+
+    func testHomeFundsTotalDoesNotChangeWithSearch() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-seed-activity"]
+        app.launch()
+        let total = app.staticTexts["funds.total"]
+        XCTAssertTrue(total.waitForExistence(timeout: 5))
+        XCTAssertEqual(total.label, "$300.00")
+        let search = app.textFields["Search cards"]
+        search.tap()
+        search.typeText("Test Atlas\n")
+        XCTAssertEqual(total.label, "$300.00")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Unused funds across active cards"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    func testBalanceLoadFailureOffersRetry() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-web-failure"]
+        app.launch()
+        openSeededCardForBalance(app)
+        app.buttons["detail.refresh"].tap()
+        let retry = app.buttons["balance.retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Balance page couldn’t be loaded"].exists)
+        XCTAssertTrue(retry.isHittable)
+    }
+
+    private func openSeededCardForBalance(_ app: XCUIApplication, last4: String = "1111") {
+        let expand = app.buttons["cards.stack.expand"]
+        if expand.waitForExistence(timeout: 5), expand.isHittable { expand.tap() }
+        let row = app.buttons["card.row." + last4]
+        for _ in 0..<6 {
+            if row.exists, row.frame.minY > 120, row.frame.maxY < app.frame.height - 180 { break }
+            app.collectionViews.firstMatch.swipeUp()
+        }
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
+        XCTAssertTrue(app.buttons["detail.refresh"].waitForExistence(timeout: 5))
     }
 
     private func completeOnboardingIfNeeded(_ app: XCUIApplication) {

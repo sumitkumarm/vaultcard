@@ -348,11 +348,8 @@ struct BulkCardCaptureView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Card from row \(value.sourceRow)")
-                            .font(.subheadline.weight(.semibold))
                         Text(CardRules.inferNetwork(value.cardNumber).displayName)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
+                            .font(.subheadline.weight(.semibold))
                     }
                     Spacer()
                     Button(role: .destructive) {
@@ -364,7 +361,7 @@ struct BulkCardCaptureView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
-                    .accessibilityLabel("Remove card from row \(value.sourceRow)")
+                    .accessibilityLabel("Remove card ending in \(CardRules.digitsOnly(value.cardNumber).suffix(4))")
                     .accessibilityIdentifier("bulk.remove.\(value.sourceRow)")
                 }
 
