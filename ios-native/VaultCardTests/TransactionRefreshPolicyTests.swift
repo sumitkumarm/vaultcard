@@ -9,13 +9,31 @@ final class TransactionRefreshPolicyTests: XCTestCase {
         return calendar
     }
 
-    func testEmptyHistoryStartsAtJanuaryFirstOfCurrentYear() {
+    func testFromDateUsesExpectedCalendarBoundaryForEmptyAndJanuaryHistory() {
         let testCalendar = calendar
-        let now = date(2025, 7, 14, calendar: testCalendar)
+        let cases: [(name: String, transactions: [CardTransaction], now: Date, expected: Date)] = [
+            (
+                "empty history starts at the current year",
+                [],
+                date(2025, 7, 14, calendar: testCalendar),
+                date(2025, 1, 1, calendar: testCalendar)
+            ),
+            (
+                "January history rolls back to December",
+                [transaction("jan", date: date(2025, 1, 8, calendar: testCalendar))],
+                date(2025, 2, 1, calendar: testCalendar),
+                date(2024, 12, 1, calendar: testCalendar)
+            )
+        ]
 
-        let fromDate = TransactionRefreshPolicy.fromDate(transactions: [], now: now, calendar: testCalendar)
-
-        XCTAssertEqual(fromDate, date(2025, 1, 1, calendar: testCalendar))
+        for testCase in cases {
+            let fromDate = TransactionRefreshPolicy.fromDate(
+                transactions: testCase.transactions,
+                now: testCase.now,
+                calendar: testCalendar
+            )
+            XCTAssertEqual(fromDate, testCase.expected, testCase.name)
+        }
     }
 
     func testUnsortedHistoryStartsMonthBeforeNewestTransactionAcrossDST() {
@@ -33,19 +51,6 @@ final class TransactionRefreshPolicyTests: XCTestCase {
         )
 
         XCTAssertEqual(fromDate, date(2024, 2, 1, calendar: testCalendar))
-    }
-
-    func testJanuaryHistoryRollsBackToDecemberOfPriorYear() {
-        let testCalendar = calendar
-        let transactions = [transaction("jan", date: date(2025, 1, 8, calendar: testCalendar))]
-
-        let fromDate = TransactionRefreshPolicy.fromDate(
-            transactions: transactions,
-            now: date(2025, 2, 1, calendar: testCalendar),
-            calendar: testCalendar
-        )
-
-        XCTAssertEqual(fromDate, date(2024, 12, 1, calendar: testCalendar))
     }
 
     func testDateStringsUseSuppliedCalendarTimeZoneAndKeepLeapDay() {
