@@ -1771,7 +1771,12 @@ struct AppEnvironment {
                 CardInput(cardNumber: "4012888888881881", expiry: "09/29", cvv: "123", nickname: "Test Atlas"),
                 CardInput(cardNumber: "5555555555554444", expiry: "09/29", cvv: "123", nickname: "Test Nova")
             ] {
-                let cardID = try cardRepository.addCard(input)
+                var seededInput = input
+                if ProcessInfo.processInfo.arguments.contains("--ui-testing-seed-long-card-names") {
+                    let names = ["1111": "Stellar Artemis", "1881": "Clever Odysseus", "4444": "Daring Leia"]
+                    seededInput.nickname = names[String(input.cardNumber.suffix(4))]
+                }
+                let cardID = try cardRepository.addCard(seededInput)
                 if ProcessInfo.processInfo.arguments.contains("--ui-testing-seed-activity") {
                     let index = input.nickname == "Test Aurora" ? 0 : (input.nickname == "Test Atlas" ? 1 : 2)
                     let descriptions = ["Corner Coffee", "Market Groceries", "Book Shop"]
@@ -1791,7 +1796,7 @@ struct AppEnvironment {
                 }
             }
             if ProcessInfo.processInfo.arguments.contains("--ui-testing-seed-zero-card"),
-               let zeroCard = try cardRepository.getCards().first(where: { $0.nickname == "Test Aurora" }) {
+               let zeroCard = try cardRepository.getCards().first(where: { $0.last4 == "1111" }) {
                 try cardRepository.applyBalanceResult(
                     cardID: zeroCard.id,
                     result: BalanceResult(balance: 0, transactions: zeroCard.transactions, fetchedAt: Date())
@@ -3477,21 +3482,49 @@ struct CardRow: View {
     var card: VaultCard
 
     var body: some View {
+        let isKnownZeroBalance = !card.isArchived && card.balance?.isFinite == true && card.balance == 0
         HStack(spacing: 12) {
             VaultNetworkRowIcon(network: card.network)
             VStack(alignment: .leading, spacing: 3) {
-                Text(card.displayName).font(.subheadline.weight(.semibold))
-                Text("•••• \(card.last4)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 3) {
-                Text(card.balance.map { $0.formatted(.currency(code: "USD")) } ?? "—")
-                    .font(.subheadline.weight(.semibold))
-                Text(card.lastFetchedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Never")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text(card.displayName)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    HStack(spacing: 6) {
+                        Text(card.balance.map { $0.formatted(.currency(code: "USD")) } ?? "—")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(isKnownZeroBalance ? .secondary : .primary)
+                            .fixedSize()
+                        if isKnownZeroBalance {
+                            Text("No funds")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(.quaternary, in: Capsule())
+                                .accessibilityLabel("No funds")
+                        }
+                    }
+                    .fixedSize()
+                }
+
+                HStack(spacing: 8) {
+                    Text("•••• \(card.last4)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Text(card.lastFetchedAt.map {
+                        CardRowTimestamp.string(date: $0)
+                    } ?? "Never")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .accessibilityLabel(card.lastFetchedAt.map {
+                            "Last refreshed \($0.formatted(date: .complete, time: .shortened))"
+                        } ?? "Never refreshed")
+                }
             }
         }
         .padding(.horizontal, 8)
