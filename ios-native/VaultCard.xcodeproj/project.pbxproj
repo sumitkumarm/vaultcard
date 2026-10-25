@@ -19,6 +19,10 @@
 		111111111111111111111115 /* BulkCardParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111015 /* BulkCardParserTests.swift */; };
 		111111111111111111111116 /* VaultFundsSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111016 /* VaultFundsSummary.swift */; };
 		111111111111111111111117 /* VaultFundsSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111017 /* VaultFundsSummaryTests.swift */; };
+		111111111111111111111118 /* TransactionRefreshPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111018 /* TransactionRefreshPolicy.swift */; };
+		111111111111111111111119 /* TransactionDateScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111019 /* TransactionDateScript.swift */; };
+		111111111111111111111120 /* TransactionRefreshPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111020 /* TransactionRefreshPolicyTests.swift */; };
+		111111111111111111111121 /* WebFormAutomationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111021 /* WebFormAutomationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -55,6 +59,10 @@
 		111111111111111111111015 /* BulkCardParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkCardParserTests.swift; sourceTree = "<group>"; };
 		111111111111111111111016 /* VaultFundsSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultFundsSummary.swift; sourceTree = "<group>"; };
 		111111111111111111111017 /* VaultFundsSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultFundsSummaryTests.swift; sourceTree = "<group>"; };
+		111111111111111111111018 /* TransactionRefreshPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionRefreshPolicy.swift; sourceTree = "<group>"; };
+		111111111111111111111019 /* TransactionDateScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionDateScript.swift; sourceTree = "<group>"; };
+		111111111111111111111020 /* TransactionRefreshPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionRefreshPolicyTests.swift; sourceTree = "<group>"; };
+		111111111111111111111021 /* WebFormAutomationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebFormAutomationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -96,6 +104,8 @@
 			isa = PBXGroup;
 			children = (
 				111111111111111111111001 /* VaultCardApp.swift */,
+				111111111111111111111019 /* TransactionDateScript.swift */,
+				111111111111111111111018 /* TransactionRefreshPolicy.swift */,
 				111111111111111111111016 /* VaultFundsSummary.swift */,
 				111111111111111111111014 /* BulkCardSupport.swift */,
 				111111111111111111111013 /* BulkCardCaptureView.swift */,
@@ -112,6 +122,8 @@
 			isa = PBXGroup;
 			children = (
 				111111111111111111111003 /* VaultCardTests.swift */,
+				111111111111111111111021 /* WebFormAutomationTests.swift */,
+				111111111111111111111020 /* TransactionRefreshPolicyTests.swift */,
 				111111111111111111111017 /* VaultFundsSummaryTests.swift */,
 				111111111111111111111015 /* BulkCardParserTests.swift */,
 			);
@@ -266,6 +278,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				111111111111111111111101 /* VaultCardApp.swift in Sources */,
+				111111111111111111111119 /* TransactionDateScript.swift in Sources */,
+				111111111111111111111118 /* TransactionRefreshPolicy.swift in Sources */,
 				111111111111111111111116 /* VaultFundsSummary.swift in Sources */,
 				111111111111111111111114 /* BulkCardSupport.swift in Sources */,
 				111111111111111111111113 /* BulkCardCaptureView.swift in Sources */,
@@ -280,6 +294,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				111111111111111111111103 /* VaultCardTests.swift in Sources */,
+				111111111111111111111121 /* WebFormAutomationTests.swift in Sources */,
+				111111111111111111111120 /* TransactionRefreshPolicyTests.swift in Sources */,
 				111111111111111111111117 /* VaultFundsSummaryTests.swift in Sources */,
 				111111111111111111111115 /* BulkCardParserTests.swift in Sources */,
 			);

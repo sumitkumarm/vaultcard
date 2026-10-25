@@ -1136,29 +1136,164 @@ enum GiftCardMallBridge {
         let cvv = jsString(credentials.cvv)
         return """
         (() => {
-          const setValue = (selectors, value) => {
-            for (const selector of selectors) {
-              const field = document.querySelector(selector);
-              if (!field) { continue; }
-              field.focus();
-              const prototype = field.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
-              const setter = Object.getOwnPropertyDescriptor(prototype, 'value') && Object.getOwnPropertyDescriptor(prototype, 'value').set;
-              if (setter) { setter.call(field, value); } else { field.value = value; }
-              field.dispatchEvent(new Event('input', { bubbles: true }));
-              field.dispatchEvent(new Event('change', { bubbles: true }));
-              return true;
+          let state = window.__vaultCardAutofillState;
+          if (!state) {
+            state = window.__vaultCardAutofillState = {
+              attempt: 0,
+              submitted: false,
+              userEdited: new WeakSet(),
+              listenerInstalled: false,
+              observer: null,
+              timeout: null
+            };
+          }
+          if (state.submitted) { return; }
+          if (state.observer) { state.observer.disconnect(); }
+          if (state.timeout) { clearTimeout(state.timeout); }
+          const attempt = ++state.attempt;
+          if (!state.listenerInstalled) {
+            const rememberUserEdit = event => {
+              if (event.isTrusted) {
+                if (event.target instanceof Element) { state.userEdited.add(event.target); }
+                if (state.retry) { state.retry(); }
+              }
+            };
+            document.addEventListener('input', rememberUserEdit, true);
+            document.addEventListener('change', rememberUserEdit, true);
+            document.addEventListener('submit', event => {
+              if (!event.isTrusted || !(event.target instanceof HTMLFormElement)
+                  || !event.target.querySelector('#credit-card-number, input[name="cardNumber"], input[autocomplete="cc-number"]')) { return; }
+              state.submitted = true;
+              if (state.observer) { state.observer.disconnect(); state.observer = null; }
+              if (state.timeout) { clearTimeout(state.timeout); state.timeout = null; }
+            }, true);
+            state.listenerInstalled = true;
+          }
+
+          const selectors = {
+            number: ['#credit-card-number','input[name="cardNumber"]','input[id*="cardNumber"]','input[autocomplete="cc-number"]','input[inputmode="numeric"]'],
+            month: ['#expiration_month','input[name="expirationMonth"]','input[id*="expirationMonth"]','select[name="expirationMonth"]','input[name="expMonth"]'],
+            year: ['#expiration_year','input[name="expirationYear"]','input[id*="expirationYear"]','select[name="expirationYear"]','input[name="expYear"]'],
+            cvv: ['#credit-card-code','input[name="cvv"]','input[placeholder="EnterCode"]','input[name="securityCode"]','input[id*="securityCode"]','input[id*="cvv"]','input[autocomplete="cc-csc"]']
+          };
+          const expected = { number: \(number), month: \(month), year: \(year), cvv: \(cvv) };
+          const isVisible = element => {
+            if (!element.isConnected) { return false; }
+            const style = window.getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+          };
+          const isSafeField = (field, kind) => {
+            const metadata = [field.name, field.id, field.getAttribute('autocomplete'), field.getAttribute('placeholder')]
+              .filter(Boolean).join(' ').toLowerCase();
+            if (kind === 'number' && field.matches('input[inputmode="numeric"]') &&
+                !/(card|pan|cc.?number)/.test(metadata) && (field.maxLength < 12 || field.maxLength > 19)) { return false; }
+            if (/\\b(pin|otp|one.?time|security.?code|cvv|cvc|phone|telephone)\\b/.test(metadata)) {
+              return kind === 'cvv' && /\\b(security.?code|cvv|cvc)\\b/.test(metadata);
             }
-            return false;
+            return true;
           };
-          const fill = () => {
-            setValue(['#credit-card-number','input[name="cardNumber"]','input[id*="cardNumber"]','input[autocomplete="cc-number"]','input[inputmode="numeric"]'], \(number));
-            setValue(['#expiration_month','input[name="expirationMonth"]','input[id*="expirationMonth"]','select[name="expirationMonth"]','input[name="expMonth"]'], \(month));
-            setValue(['#expiration_year','input[name="expirationYear"]','input[id*="expirationYear"]','select[name="expirationYear"]','input[name="expYear"]'], \(year));
-            setValue(['#credit-card-code','input[name="cvv"]','input[placeholder="EnterCode"]','input[name="securityCode"]','input[id*="securityCode"]','input[id*="cvv"]','input[autocomplete="cc-csc"]'], \(cvv));
+          const findField = (form, kind) => {
+            for (const selector of selectors[kind]) {
+              for (const field of form.querySelectorAll(selector)) {
+                if (isVisible(field) && isSafeField(field, kind)) { return field; }
+              }
+            }
+            return null;
+          };
+          const findCardForm = () => {
+            for (const form of document.forms) {
+              const fields = {
+                number: findField(form, 'number'),
+                month: findField(form, 'month'),
+                year: findField(form, 'year'),
+                cvv: findField(form, 'cvv')
+              };
+              if (Object.values(fields).every(Boolean)) { return { form, fields }; }
+            }
+            return null;
+          };
+          const digits = value => String(value || '').replace(/\\D/g, '');
+          if (!['number', 'month', 'year', 'cvv'].every(kind => digits(expected[kind]).length > 0)) { return; }
+          const canonical = (value, kind) => {
+            const normalized = digits(value);
+            if (kind === 'month') { return normalized.replace(/^0+/, '') || '0'; }
+            return normalized;
+          };
+          const matches = (field, value, kind) => {
+            const actual = canonical(field.value, kind);
+            const wanted = canonical(value, kind);
+            if (actual === wanted) { return true; }
+            return kind === 'year' && wanted.length === 4 && actual.length === 2 && actual === wanted.slice(-2);
+          };
+          const writeValue = (field, value) => {
+            field.focus();
+            const prototype = field instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+            if (setter) { setter.call(field, value); } else { field.value = value; }
+            field.dispatchEvent(new Event('input', { bubbles: true }));
+            field.dispatchEvent(new Event('change', { bubbles: true }));
+          };
+          const findSubmitControl = form => {
+            const controls = Array.from(form.querySelectorAll('button[type="submit"], button:not([type]), input[type="submit"]'))
+              .filter(control => {
+                if (control.disabled || control.getAttribute('aria-disabled') === 'true' || !isVisible(control)) { return false; }
+                const label = (control.getAttribute('aria-label') || control.value || control.textContent || '')
+                  .trim().replace(/\\s+/g, ' ').toLowerCase();
+                return /^(submit|check balance|view balance)$/.test(label);
+              });
+            return controls.length === 1 ? controls[0] : null;
+          };
+          const finish = () => {
+            if (state.observer) { state.observer.disconnect(); state.observer = null; }
+            if (state.timeout) { clearTimeout(state.timeout); state.timeout = null; }
+          };
+          let submitCheckScheduled = false;
+          const fillAndSubmit = () => {
+            if (state.attempt !== attempt || state.submitted || Date.now() >= state.deadline) { return; }
+            const match = findCardForm();
+            if (!match) { return; }
+            for (const kind of ['number', 'month', 'year', 'cvv']) {
+              const field = match.fields[kind];
+              if (!state.userEdited.has(field) && !matches(field, expected[kind], kind)) {
+                writeValue(field, expected[kind]);
+              }
+            }
+            const populated = ['number', 'month', 'year', 'cvv'].every(kind =>
+              matches(match.fields[kind], expected[kind], kind)
+            );
+            if (!populated) { return; }
             if (window.__vaultCardScrollToForm) { window.__vaultCardScrollToForm(true); }
+            if (submitCheckScheduled) { return; }
+            submitCheckScheduled = true;
+            requestAnimationFrame(() => {
+              submitCheckScheduled = false;
+              requestAnimationFrame(() => {
+                if (state.attempt !== attempt || state.submitted || Date.now() >= state.deadline) { return; }
+                const current = findCardForm();
+                if (!current || !['number', 'month', 'year', 'cvv'].every(kind =>
+                  matches(current.fields[kind], expected[kind], kind)
+                )) { return; }
+                if (!current.form.checkValidity()) { return; }
+                const submit = findSubmitControl(current.form);
+                if (!submit || !submit.isConnected || !current.form.contains(submit)) { return; }
+                state.submitted = true;
+                finish();
+                submit.click();
+              });
+            });
           };
-          fill();
-          [250, 800, 1600].forEach(delay => setTimeout(fill, delay));
+          state.deadline = Date.now() + 30000;
+          state.observer = new MutationObserver(fillAndSubmit);
+          state.observer.observe(document.documentElement, {
+            attributes: true,
+            childList: true,
+            subtree: true,
+            attributeFilter: ['aria-disabled', 'disabled', 'class', 'style', 'value']
+          });
+          state.timeout = setTimeout(finish, 30000);
+          state.retry = fillAndSubmit;
+          [0, 250, 800, 1600].forEach(delay => setTimeout(fillAndSubmit, delay));
         })();
         """
     }
@@ -4167,6 +4302,7 @@ struct GiftCardMallRefreshView: View {
     @Environment(AppModel.self) private var model
     let cardID: String
     @State private var summary: GiftCardMallSummaryCapture?
+    @State private var transactionFromDate = Date()
     @State private var credentials: CardCredentials?
     @State private var isPageLoading = true
     @State private var isPreparingAutofill = false
@@ -4180,6 +4316,7 @@ struct GiftCardMallRefreshView: View {
             if isBrowserReady {
                 GiftCardMallWebView(
                     credentials: credentials,
+                    transactionFromDate: transactionFromDate,
                     onLoadingChange: { isLoading in
                         isPageLoading = isLoading
                         if isLoading { pageLoadFailed = false }
@@ -4198,7 +4335,13 @@ struct GiftCardMallRefreshView: View {
                         }
                         if let summary, let result = try GiftCardMallBridge.parseTransactions(body, sourceURL: url, summary: summary) {
                             guard !result.transactions.isEmpty else { return }
-                            model.applyForegroundRefresh(id: cardID, result: result)
+                            let existing = model.cards.first { $0.id == cardID }?.transactions ?? []
+                            let merged = BalanceResult(
+                                balance: result.balance,
+                                transactions: TransactionRefreshPolicy.merge(existing: existing, incoming: result.transactions),
+                                fetchedAt: result.fetchedAt
+                            )
+                            model.applyForegroundRefresh(id: cardID, result: merged)
                         }
                     } catch {
                         model.alertMessage = error.localizedDescription
@@ -4290,6 +4433,11 @@ struct GiftCardMallRefreshView: View {
         guard !Task.isCancelled else { return }
         do {
             credentials = try await model.credentialsForAutofill(id: cardID)
+            // Freeze the range before any response updates the saved history.
+            transactionFromDate = TransactionRefreshPolicy.fromDate(
+                transactions: model.cards.first { $0.id == cardID }?.transactions ?? [],
+                now: Date(), calendar: Calendar(identifier: .gregorian)
+            )
             isBrowserReady = true
         } catch {
             preparationError = error.localizedDescription
@@ -4304,6 +4452,7 @@ extension Notification.Name {
 
 struct GiftCardMallWebView: UIViewRepresentable {
     var credentials: CardCredentials?
+    var transactionFromDate: Date
     var onLoadingChange: (Bool) -> Void
     var onNavigationError: (Bool) -> Void
     var onMessage: (Any, URL?) -> Void
@@ -4316,7 +4465,9 @@ struct GiftCardMallWebView: UIViewRepresentable {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.userContentController.add(context.coordinator, name: GiftCardMallBridge.handlerName)
-        let readyScript = GiftCardMallBridge.installScript() + "\nwindow.webkit.messageHandlers." + GiftCardMallBridge.handlerName + ".postMessage({kind: 'vaultcardPageReady'});"
+        let readyScript = GiftCardMallBridge.installScript()
+            + "\n" + GiftCardMallBridge.transactionDateScript(fromDate: transactionFromDate, calendar: Calendar(identifier: .gregorian))
+            + "\nwindow.webkit.messageHandlers." + GiftCardMallBridge.handlerName + ".postMessage({kind: 'vaultcardPageReady'});"
         configuration.userContentController.addUserScript(WKUserScript(
             source: readyScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true
         ))
@@ -4489,8 +4640,12 @@ struct GiftCardMallWebView: UIViewRepresentable {
         func installObservers() {
             tokens.append(NotificationCenter.default.addObserver(forName: .giftCardMallAutofill, object: nil, queue: .main) { [weak self] notification in
                 guard let credentials = notification.object as? CardCredentials else { return }
-                self?.lastAppliedCredentials = nil
-                self?.updateCredentials(credentials)
+                guard let self else { return }
+                // This toolbar action is an explicit retry, unlike repeated page-ready events.
+                self.webView?.evaluateJavaScript("if (window.__vaultCardAutofillState) { window.__vaultCardAutofillState.submitted = false; window.__vaultCardAutofillState.userEdited = new WeakSet(); }") { [weak self] _, _ in
+                    self?.lastAppliedCredentials = nil
+                    self?.updateCredentials(credentials)
+                }
             })
             tokens.append(NotificationCenter.default.addObserver(forName: .giftCardMallReload, object: nil, queue: .main) { [weak self] _ in
                 guard let self, let webView = self.webView else { return }
