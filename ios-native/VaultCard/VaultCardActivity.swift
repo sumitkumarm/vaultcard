@@ -396,7 +396,7 @@ private struct ActivityTransactionRow: View {
     var body: some View {
         VaultSurface(padding: 12) {
             HStack(spacing: 12) {
-                VaultRowIcon(symbol: "bag.fill")
+                TransactionIcon(amount: entry.amount)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(entry.description)
                         .font(.subheadline.weight(.semibold))
@@ -419,17 +419,13 @@ private struct ActivityTransactionRow: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Text(entry.amount.formatted(.currency(code: "USD")))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                TransactionAmountLabel(amount: entry.amount)
             }
             .contentShape(Rectangle())
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(entry.description), \(entry.amount.formatted(.currency(code: "USD"))), "
+            "\(entry.description), \(TransactionAppearance(amount: entry.amount).accessibilityLabel), "
                 + "\(entry.cardName) ending \(entry.last4), "
                 + entry.date.formatted(date: .complete, time: .shortened)
         )

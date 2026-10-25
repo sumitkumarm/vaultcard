@@ -358,6 +358,98 @@ final class VaultCardUITests: XCTestCase {
         XCTAssertTrue(retry.isHittable)
     }
 
+    func testZeroBalanceRefreshAutoArchivesAndOffersUndo() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-zero-refresh"]
+        app.launch()
+        openSeededCardForBalance(app)
+        app.buttons["detail.refresh"].tap()
+        let popup = app.alerts["Card archived"]
+        XCTAssertTrue(popup.waitForExistence(timeout: 5))
+        XCTAssertTrue(popup.buttons["Done"].exists)
+        XCTAssertTrue(popup.buttons["Keep This Card"].exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Zero balance automatic archive with undo"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        popup.buttons["Keep This Card"].tap()
+        XCTAssertFalse(popup.exists)
+        XCTAssertTrue(app.navigationBars["Check Balance"].exists)
+        app.navigationBars["Check Balance"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["detail.archive"].waitForExistence(timeout: 5))
+    }
+
+    func testDisabledAutoArchiveOffersOneTimeAndAlwaysChoices() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-zero-refresh"]
+        app.launch()
+        app.buttons["tray.settings"].tap()
+        let toggle = app.switches["Archive $0 cards automatically"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertEqual(toggle.value as? String, "1")
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        XCTAssertEqual(toggle.value as? String, "0")
+        app.buttons["tray.vault"].tap()
+        openSeededCardForBalance(app)
+        app.buttons["detail.refresh"].tap()
+        let popup = app.alerts["No balance left"]
+        XCTAssertTrue(popup.waitForExistence(timeout: 5))
+        XCTAssertTrue(popup.buttons["Not Now"].exists)
+        XCTAssertTrue(popup.buttons["Archive This Card"].exists)
+        XCTAssertTrue(popup.buttons["Always Archive $0 Cards"].exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Zero balance archive choices"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        popup.buttons["Always Archive $0 Cards"].tap()
+        XCTAssertFalse(popup.exists)
+        app.navigationBars["Check Balance"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["detail.restore"].waitForExistence(timeout: 5))
+        app.buttons["tray.settings"].tap()
+        XCTAssertEqual(app.switches["Archive $0 cards automatically"].value as? String, "1")
+    }
+
+    func testZeroBalanceListFilterAndBulkArchive() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-seed-activity", "--ui-testing-seed-zero-card"]
+        app.launch()
+        let zeroFilter = app.buttons["cards.filter.$0-balance"]
+        XCTAssertTrue(zeroFilter.waitForExistence(timeout: 5))
+        if !zeroFilter.isHittable {
+            app.scrollViews.firstMatch.swipeLeft()
+        }
+        zeroFilter.tap()
+        XCTAssertTrue(app.staticTexts["Test Aurora"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Test Nova"].exists)
+        app.buttons["cards.archived"].tap()
+        app.buttons["Archive $0 Cards (1)"].tap()
+        let popup = app.alerts.firstMatch
+        XCTAssertTrue(popup.waitForExistence(timeout: 5))
+        popup.buttons["cards.archiveZero.confirm"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["No matching cards"].waitForExistence(timeout: 5))
+    }
+
+    func testCreditsAndDebitsAppearDistinctlyInActivityAndDetail() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-seed-activity", "--ui-testing-seed-signed-activity"]
+        app.launch()
+        openSeededCardForBalance(app)
+        app.scrollViews.firstMatch.swipeUp()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Credit")).firstMatch.waitForExistence(timeout: 5))
+        let detail = XCTAttachment(screenshot: app.screenshot())
+        detail.name = "Quiet debits and highlighted credits"
+        detail.lifetime = .keepAlways
+        add(detail)
+        app.buttons["tray.vault"].tap()
+        app.buttons["cards.activity"].tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Credit")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "activity.transaction.", "Debit")).firstMatch.exists)
+        let activity = XCTAttachment(screenshot: app.screenshot())
+        activity.name = "Credits and debits in activity"
+        activity.lifetime = .keepAlways
+        add(activity)
+    }
+
     private func openSeededCardForBalance(_ app: XCUIApplication, last4: String = "1111") {
         let expand = app.buttons["cards.stack.expand"]
         if expand.waitForExistence(timeout: 5), expand.isHittable { expand.tap() }

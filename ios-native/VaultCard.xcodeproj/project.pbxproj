@@ -24,6 +24,8 @@
 		111111111111111111111120 /* TransactionRefreshPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111020 /* TransactionRefreshPolicyTests.swift */; };
 		111111111111111111111121 /* WebFormAutomationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111021 /* WebFormAutomationTests.swift */; };
 		111111111111111111111122 /* CardSubmissionReadiness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111022 /* CardSubmissionReadiness.swift */; };
+		111111111111111111111123 /* TransactionAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111023 /* TransactionAppearance.swift */; };
+		111111111111111111111124 /* ZeroBalanceArchiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111024 /* ZeroBalanceArchiveTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -65,6 +67,8 @@
 		111111111111111111111020 /* TransactionRefreshPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionRefreshPolicyTests.swift; sourceTree = "<group>"; };
 		111111111111111111111021 /* WebFormAutomationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebFormAutomationTests.swift; sourceTree = "<group>"; };
 		111111111111111111111022 /* CardSubmissionReadiness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardSubmissionReadiness.swift; sourceTree = "<group>"; };
+		111111111111111111111023 /* TransactionAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionAppearance.swift; sourceTree = "<group>"; };
+		111111111111111111111024 /* ZeroBalanceArchiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZeroBalanceArchiveTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -106,6 +110,7 @@
 			isa = PBXGroup;
 			children = (
 				111111111111111111111001 /* VaultCardApp.swift */,
+				111111111111111111111023 /* TransactionAppearance.swift */,
 				111111111111111111111022 /* CardSubmissionReadiness.swift */,
 				111111111111111111111019 /* TransactionDateScript.swift */,
 				111111111111111111111018 /* TransactionRefreshPolicy.swift */,
@@ -125,6 +130,7 @@
 			isa = PBXGroup;
 			children = (
 				111111111111111111111003 /* VaultCardTests.swift */,
+				111111111111111111111024 /* ZeroBalanceArchiveTests.swift */,
 				111111111111111111111021 /* WebFormAutomationTests.swift */,
 				111111111111111111111020 /* TransactionRefreshPolicyTests.swift */,
 				111111111111111111111017 /* VaultFundsSummaryTests.swift */,
@@ -281,6 +287,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				111111111111111111111101 /* VaultCardApp.swift in Sources */,
+				111111111111111111111123 /* TransactionAppearance.swift in Sources */,
 				111111111111111111111122 /* CardSubmissionReadiness.swift in Sources */,
 				111111111111111111111119 /* TransactionDateScript.swift in Sources */,
 				111111111111111111111118 /* TransactionRefreshPolicy.swift in Sources */,
@@ -298,6 +305,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				111111111111111111111103 /* VaultCardTests.swift in Sources */,
+				111111111111111111111124 /* ZeroBalanceArchiveTests.swift in Sources */,
 				111111111111111111111121 /* WebFormAutomationTests.swift in Sources */,
 				111111111111111111111120 /* TransactionRefreshPolicyTests.swift in Sources */,
 				111111111111111111111117 /* VaultFundsSummaryTests.swift in Sources */,
