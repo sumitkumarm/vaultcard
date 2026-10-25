@@ -450,6 +450,58 @@ final class VaultCardUITests: XCTestCase {
         add(activity)
     }
 
+    func testLowBalanceRefreshCanScheduleEditAndCancelUseReminder() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-low-refresh"]
+        app.launch()
+        openSeededCardForBalance(app)
+        app.buttons["detail.refresh"].tap()
+        XCTAssertTrue(app.staticTexts["balance.saved"].waitForExistence(timeout: 5))
+        let offer = app.buttons["reminder.open"]
+        XCTAssertTrue(offer.waitForExistence(timeout: 5))
+        offer.tap()
+        XCTAssertTrue(app.staticTexts["Balance snapshot"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "3.99")).firstMatch.exists)
+        let sheet = XCTAttachment(screenshot: app.screenshot())
+        sheet.name = "Choose one-time use reminder"
+        sheet.lifetime = .keepAlways
+        add(sheet)
+        app.buttons["reminder.save"].tap()
+        XCTAssertTrue(app.navigationBars["Check Balance"].waitForExistence(timeout: 5))
+        app.navigationBars["Check Balance"].buttons.element(boundBy: 0).tap()
+        let reminderDate = app.staticTexts["reminder.date"]
+        XCTAssertTrue(reminderDate.waitForExistence(timeout: 5))
+        app.buttons["reminder.open"].tap()
+        XCTAssertTrue(app.navigationBars["Edit Reminder"].waitForExistence(timeout: 5))
+        app.buttons["reminder.sheet.cancel"].tap()
+        app.buttons["reminder.cancel"].tap()
+        XCTAssertTrue(app.buttons["Remind me to use this"].waitForExistence(timeout: 5))
+        let detail = XCTAttachment(screenshot: app.screenshot())
+        detail.name = "Low balance with actionable reminder"
+        detail.lifetime = .keepAlways
+        add(detail)
+        app.buttons["tray.vault"].tap()
+        let expand = app.buttons["cards.stack.expand"]
+        if expand.exists, expand.isHittable { expand.tap() }
+        XCTAssertTrue(app.buttons["card.row.1111"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Low balance"].exists)
+    }
+
+    func testSettingsOnlyOfferImplementedNotifications() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards"]
+        app.launch()
+        app.buttons["tray.settings"].tap()
+        XCTAssertTrue(app.switches["settings.expiryWarnings"].waitForExistence(timeout: 5))
+        for obsolete in ["Balance updated", "Refresh failed", "Low balance", "Private Analytics"] {
+            XCTAssertFalse(app.switches[obsolete].exists)
+        }
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Actionable notification settings"
+        image.lifetime = .keepAlways
+        add(image)
+    }
+
     private func openSeededCardForBalance(_ app: XCUIApplication, last4: String = "1111") {
         let expand = app.buttons["cards.stack.expand"]
         if expand.waitForExistence(timeout: 5), expand.isHittable { expand.tap() }

@@ -28,6 +28,9 @@
 		111111111111111111111124 /* ZeroBalanceArchiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111024 /* ZeroBalanceArchiveTests.swift */; };
 		111111111111111111111125 /* CardRowTimestamp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111025 /* CardRowTimestamp.swift */; };
 		111111111111111111111126 /* CardRowTimestampTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111026 /* CardRowTimestampTests.swift */; };
+		111111111111111111111127 /* CardNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111027 /* CardNotificationService.swift */; };
+		111111111111111111111128 /* CardUseReminderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111028 /* CardUseReminderView.swift */; };
+		111111111111111111111129 /* CardNotificationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111029 /* CardNotificationServiceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -73,6 +76,9 @@
 		111111111111111111111024 /* ZeroBalanceArchiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZeroBalanceArchiveTests.swift; sourceTree = "<group>"; };
 		111111111111111111111025 /* CardRowTimestamp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardRowTimestamp.swift; sourceTree = "<group>"; };
 		111111111111111111111026 /* CardRowTimestampTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardRowTimestampTests.swift; sourceTree = "<group>"; };
+		111111111111111111111027 /* CardNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardNotificationService.swift; sourceTree = "<group>"; };
+		111111111111111111111028 /* CardUseReminderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardUseReminderView.swift; sourceTree = "<group>"; };
+		111111111111111111111029 /* CardNotificationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardNotificationServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -114,6 +120,8 @@
 			isa = PBXGroup;
 			children = (
 				111111111111111111111001 /* VaultCardApp.swift */,
+				111111111111111111111028 /* CardUseReminderView.swift */,
+				111111111111111111111027 /* CardNotificationService.swift */,
 				111111111111111111111025 /* CardRowTimestamp.swift */,
 				111111111111111111111023 /* TransactionAppearance.swift */,
 				111111111111111111111022 /* CardSubmissionReadiness.swift */,
@@ -135,6 +143,7 @@
 			isa = PBXGroup;
 			children = (
 				111111111111111111111003 /* VaultCardTests.swift */,
+				111111111111111111111029 /* CardNotificationServiceTests.swift */,
 				111111111111111111111026 /* CardRowTimestampTests.swift */,
 				111111111111111111111024 /* ZeroBalanceArchiveTests.swift */,
 				111111111111111111111021 /* WebFormAutomationTests.swift */,
@@ -293,6 +302,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				111111111111111111111101 /* VaultCardApp.swift in Sources */,
+				111111111111111111111128 /* CardUseReminderView.swift in Sources */,
+				111111111111111111111127 /* CardNotificationService.swift in Sources */,
 				111111111111111111111125 /* CardRowTimestamp.swift in Sources */,
 				111111111111111111111123 /* TransactionAppearance.swift in Sources */,
 				111111111111111111111122 /* CardSubmissionReadiness.swift in Sources */,
@@ -312,6 +323,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				111111111111111111111103 /* VaultCardTests.swift in Sources */,
+				111111111111111111111129 /* CardNotificationServiceTests.swift in Sources */,
 				111111111111111111111126 /* CardRowTimestampTests.swift in Sources */,
 				111111111111111111111124 /* ZeroBalanceArchiveTests.swift in Sources */,
 				111111111111111111111121 /* WebFormAutomationTests.swift in Sources */,
