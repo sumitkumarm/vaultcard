@@ -5,11 +5,14 @@ import Vision
 
 struct BulkCardRow: Identifiable {
     var id = UUID()
-    var cardNumber: String
+    var cardNumber: String {
+        didSet { if cardNumber != oldValue { numberConfirmed = false } }
+    }
     var expiry: String
     var code: String
     var codeIsPIN: Bool
     var sourceRow: Int
+    var numberConfirmed = false
 
     var issue: String? {
         var problems: [String] = []

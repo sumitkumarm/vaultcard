@@ -4,6 +4,61 @@ import XCTest
 
 @MainActor
 final class BulkCardParserTests: XCTestCase {
+    func testBulkReviewDetectsExistingAndRepeatedNumbersBeforeValidation() {
+        let row = BulkCardRow(cardNumber: "4111 1111 1111 1111", expiry: "bad", code: "", codeIsPIN: false, sourceRow: 1)
+        XCTAssertEqual(BulkCardReview.status(for: row, existingNumbers: ["4111111111111111"], precedingNumbers: []), .existing)
+        XCTAssertEqual(BulkCardReview.status(for: row, existingNumbers: [], precedingNumbers: ["4111111111111111"]), .duplicate)
+    }
+
+    func testBulkSaveSkipsArchivedAndActiveExistingCardsAndRepeatedRows() throws {
+        let environment = try AppEnvironment.uiTesting()
+        let model = AppModel(environment: environment)
+        let id = try model.addCard(CardInput(cardNumber: "4111111111111111", expiry: "09/29", cvv: "123"))
+        try model.archiveCards(ids: [id])
+        let rows = BulkCardParser.parse("4111 1111 1111 1111,08/30,456\n4000000000061111,09/29,123\n4000000000061111,09/29,123")
+        let result = try model.saveBulkRows(rows)
+        XCTAssertEqual(result.savedCardIDs.count, 1)
+        XCTAssertEqual(result.duplicateRowIDs, [rows[0].id, rows[2].id])
+        XCTAssertTrue(result.pendingRowIDs.isEmpty)
+        XCTAssertEqual(model.cards.count, 2)
+        XCTAssertEqual(model.sortedArchivedCards.count, 1)
+        // Same suffix is not a duplicate; expiry or CVV differences do not defeat a full-number match.
+        XCTAssertEqual(model.cards.map(\.last4), ["1111", "1111"])
+        XCTAssertEqual(try model.saveBulkRows(rows).duplicateRowIDs.count, 3)
+        XCTAssertEqual(model.cards.count, 2)
+    }
+
+    func testBulkSaveSavesValidRowsAndLeavesInvalidNumbersUntilExplicitlyConfirmed() throws {
+        let environment = try AppEnvironment.uiTesting()
+        let model = AppModel(environment: environment)
+        var rows = BulkCardParser.parse("4000000000000003,09/29,123\n4000000000000002,09/29,")
+        XCTAssertEqual(rows.count, 2)
+        let first = try model.saveBulkRows(rows)
+        XCTAssertEqual(first.savedRowIDs, [rows[1].id])
+        XCTAssertEqual(first.pendingRowIDs, [rows[0].id])
+        XCTAssertEqual(model.cards.count, 1)
+        rows[0].numberConfirmed = true
+        let second = try model.saveBulkRows([rows[0]])
+        XCTAssertEqual(second.savedRowIDs, [rows[0].id])
+        XCTAssertEqual(model.cards.count, 2)
+        XCTAssertEqual(try environment.cardRepository.getCredentials(cardID: second.savedCardIDs[0]).cardNumber, "4000000000000003")
+    }
+
+    func testConfirmedNumberStillRequiresExpiryAndCodeAndCannotBeEmpty() throws {
+        var row = BulkCardRow(cardNumber: "4000000000000003", expiry: "bad", code: "123", codeIsPIN: false, sourceRow: 1)
+        row.numberConfirmed = true
+        XCTAssertEqual(BulkCardReview.status(for: row, existingNumbers: [], precedingNumbers: []), .needsReview("Check expiry"))
+        row.expiry = "09/29"
+        row.code = "12"
+        XCTAssertEqual(BulkCardReview.status(for: row, existingNumbers: [], precedingNumbers: []), .needsReview("Check CVV"))
+        row.code = ""
+        row.cardNumber = "4000000000000004"
+        XCTAssertFalse(row.numberConfirmed)
+        row.numberConfirmed = true
+        row.cardNumber = ""
+        XCTAssertEqual(BulkCardReview.status(for: row, existingNumbers: [], precedingNumbers: []), .needsReview("Check card number"))
+    }
+
     func testRequestedMonthAndYearVariants() {
         for month in ["May", "may", "Aug", "August", "august", "08", "8"] {
             for year in ["26", "'26", "’26", "2026"] {

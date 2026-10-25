@@ -1920,8 +1920,8 @@ final class AppModel {
         saveSettings()
     }
 
-    func addCard(_ input: CardInput, allowMissingCVV: Bool = false) throws -> String {
-        guard CardRules.isValidCardNumber(input.cardNumber) else { throw VaultError.validation("Enter a valid Visa or Mastercard number.") }
+    func addCard(_ input: CardInput, allowMissingCVV: Bool = false, allowConfirmedNumber: Bool = false) throws -> String {
+        guard CardRules.isValidCardNumber(input.cardNumber) || (allowConfirmedNumber && BulkCardReview.canConfirmNumber(input.cardNumber)) else { throw VaultError.validation("Enter a valid Visa or Mastercard number.") }
         guard CardRules.validateExpiry(input.expiry) else { throw VaultError.validation("Use MM/YY.") }
         guard (allowMissingCVV && input.cvv.isEmpty) || CardRules.validateCVV(input.cvv) else { throw VaultError.validation("Enter a valid CVV.") }
         var resolvedInput = input
@@ -1947,11 +1947,48 @@ final class AppModel {
         }
         var savedIDs: [String] = []
         do {
-            for input in inputs { savedIDs.append(try addCard(input, allowMissingCVV: true)) }
+            var existing = try bulkExistingCardNumbers()
+            for input in inputs {
+                let number = CardRules.digitsOnly(input.cardNumber)
+                guard existing.insert(number).inserted else { continue }
+                savedIDs.append(try addCard(input, allowMissingCVV: true))
+            }
             return savedIDs
         } catch {
             reloadCards()
             throw BulkCardSaveError(savedIDs: savedIDs, underlying: error)
+        }
+    }
+
+    // Compare secure full numbers, never suffixes, CVV, or expiry. Archived cards count too.
+    func bulkExistingCardNumbers() throws -> Set<String> {
+        try Set(environment.cardRepository.getCards().map {
+            CardRules.digitsOnly(try environment.cardRepository.getCredentials(cardID: $0.id).cardNumber)
+        })
+    }
+
+    func saveBulkRows(_ rows: [BulkCardRow]) throws -> BulkCardSaveResult {
+        var existing = try bulkExistingCardNumbers()
+        var result = BulkCardSaveResult()
+        do {
+            for row in rows {
+                switch BulkCardReview.status(for: row, existingNumbers: existing, precedingNumbers: []) {
+                case .existing, .duplicate:
+                    result.duplicateRowIDs.insert(row.id)
+                case .needsReview:
+                    result.pendingRowIDs.insert(row.id)
+                case .ready:
+                    let id = try addCard(row.input, allowMissingCVV: true, allowConfirmedNumber: row.numberConfirmed)
+                    result.savedCardIDs.append(id)
+                    result.savedRowIDs.insert(row.id)
+                    existing.insert(CardRules.digitsOnly(row.cardNumber))
+                }
+            }
+            return result
+        } catch {
+            reloadCards()
+            throw BulkCardSaveError(savedIDs: result.savedCardIDs, underlying: error,
+                savedRowIDs: result.savedRowIDs, duplicateRowIDs: result.duplicateRowIDs)
         }
     }
 
