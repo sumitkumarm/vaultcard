@@ -1148,6 +1148,7 @@ enum GiftCardMallBridge {
             };
           }
           if (state.submitted) { return; }
+          if (state.cancel) { state.cancel(); }
           if (state.observer) { state.observer.disconnect(); }
           if (state.timeout) { clearTimeout(state.timeout); }
           const attempt = ++state.attempt;
@@ -1164,6 +1165,7 @@ enum GiftCardMallBridge {
               if (!event.isTrusted || !(event.target instanceof HTMLFormElement)
                   || !event.target.querySelector('#credit-card-number, input[name="cardNumber"], input[autocomplete="cc-number"]')) { return; }
               state.submitted = true;
+              if (state.cancel) { state.cancel(); }
               if (state.observer) { state.observer.disconnect(); state.observer = null; }
               if (state.timeout) { clearTimeout(state.timeout); state.timeout = null; }
             }, true);
@@ -1245,8 +1247,18 @@ enum GiftCardMallBridge {
             return controls.length === 1 ? controls[0] : null;
           };
           const finish = () => {
+            window.removeEventListener('vaultcardIssuerReady', fillAndSubmit);
             if (state.observer) { state.observer.disconnect(); state.observer = null; }
             if (state.timeout) { clearTimeout(state.timeout); state.timeout = null; }
+          };
+          const issuerIsReady = () => {
+            const readiness = window.__vaultCardIssuerReadiness;
+            const hasWidget = Array.from(document.scripts).some(script => {
+              if (!script.src) { return false; }
+              const url = new URL(script.src, document.baseURI);
+              return url.hostname === 'content.blackhawknetwork.com' && url.pathname.startsWith('/riskwidget/');
+            });
+            return !(hasWidget || readiness?.started) || readiness?.ready === true;
           };
           let submitCheckScheduled = false;
           const fillAndSubmit = () => {
@@ -1274,7 +1286,7 @@ enum GiftCardMallBridge {
                 if (!current || !['number', 'month', 'year', 'cvv'].every(kind =>
                   matches(current.fields[kind], expected[kind], kind)
                 )) { return; }
-                if (!current.form.checkValidity()) { return; }
+                if (!current.form.checkValidity() || !issuerIsReady()) { return; }
                 const submit = findSubmitControl(current.form);
                 if (!submit || !submit.isConnected || !current.form.contains(submit)) { return; }
                 state.submitted = true;
@@ -1283,7 +1295,9 @@ enum GiftCardMallBridge {
               });
             });
           };
-          state.deadline = Date.now() + 30000;
+          state.cancel = finish;
+          window.addEventListener('vaultcardIssuerReady', fillAndSubmit);
+          state.deadline = Date.now() + 120000;
           state.observer = new MutationObserver(fillAndSubmit);
           state.observer.observe(document.documentElement, {
             attributes: true,
@@ -1291,7 +1305,7 @@ enum GiftCardMallBridge {
             subtree: true,
             attributeFilter: ['aria-disabled', 'disabled', 'class', 'style', 'value']
           });
-          state.timeout = setTimeout(finish, 30000);
+          state.timeout = setTimeout(finish, 120000);
           state.retry = fillAndSubmit;
           [0, 250, 800, 1600].forEach(delay => setTimeout(fillAndSubmit, delay));
         })();
@@ -4464,6 +4478,9 @@ struct GiftCardMallWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: GiftCardMallBridge.cardSubmissionReadinessScript(), injectionTime: .atDocumentStart, forMainFrameOnly: true
+        ))
         configuration.userContentController.add(context.coordinator, name: GiftCardMallBridge.handlerName)
         let readyScript = GiftCardMallBridge.installScript()
             + "\n" + GiftCardMallBridge.transactionDateScript(fromDate: transactionFromDate, calendar: Calendar(identifier: .gregorian))
@@ -4605,7 +4622,7 @@ struct GiftCardMallWebView: UIViewRepresentable {
                 return
             }
             if let response = navigationResponse.response as? HTTPURLResponse,
-               !(200..<400).contains(response.statusCode) {
+               !GiftCardMallBridge.canDisplayBalanceResponse(url: response.url, statusCode: response.statusCode, mimeType: response.mimeType) {
                 decisionHandler(.cancel)
                 onLoadingChange(false)
                 onNavigationError(true)
