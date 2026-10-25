@@ -167,6 +167,39 @@ struct VaultNetworkMark: View {
     }
 }
 
+struct VaultNetworkRowIcon: View {
+    let network: CardNetwork
+
+    var body: some View {
+        Group {
+            switch network {
+            case .visa:
+                logoTile(assetName: "VisaNetworkLogo")
+            case .mastercard:
+                logoTile(assetName: "MastercardNetworkLogo")
+            case .unknown:
+                VaultRowIcon(symbol: "creditcard.fill")
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(network.displayName)
+    }
+
+    private func logoTile(assetName: String) -> some View {
+        Image(assetName)
+            .renderingMode(.original)
+            .resizable()
+            .scaledToFit()
+            .frame(width: 27, height: 20)
+            .frame(width: 34, height: 34)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+            }
+    }
+}
+
 struct VaultCardArtwork: View {
     let card: VaultCard
     var compact = false

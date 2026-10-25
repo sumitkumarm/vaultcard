@@ -3281,7 +3281,7 @@ struct CardRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            VaultRowIcon(symbol: "creditcard.fill")
+            VaultNetworkRowIcon(network: card.network)
             VStack(alignment: .leading, spacing: 3) {
                 Text(card.displayName).font(.subheadline.weight(.semibold))
                 Text("•••• \(card.last4)")
