@@ -1774,6 +1774,12 @@ struct AppEnvironment {
                     result: BalanceResult(balance: 0, transactions: zeroCard.transactions, fetchedAt: Date())
                 )
             }
+            if ProcessInfo.processInfo.arguments.contains("--ui-testing-seed-archived-cards") {
+                let archivedCardIDs = Set(try cardRepository.getCards()
+                    .filter { ["1111", "1881"].contains($0.last4) }
+                    .map(\.id))
+                try cardRepository.archiveCards(ids: archivedCardIDs)
+            }
         }
         return AppEnvironment(
             cardRepository: cardRepository,
@@ -2004,8 +2010,10 @@ final class AppModel {
 
     var isShowingArchived: Bool {
         guard let first = routePath.first else { return false }
-        if case .archived = first { return true }
-        return false
+        switch first {
+        case .archived, .archivedZeroBalance: return true
+        default: return false
+        }
     }
 
     var isShowingActivity: Bool {
@@ -2084,6 +2092,11 @@ final class AppModel {
     func showArchivedCards() {
         guard routePath.last != .archived else { return }
         routePath = [.archived]
+    }
+
+    func showArchivedZeroBalanceCards() {
+        guard routePath.last != .archivedZeroBalance else { return }
+        routePath = [.archivedZeroBalance]
     }
 
     func showActivity() {
@@ -2250,9 +2263,13 @@ final class AppModel {
 
     private func isDetailPresentedFromArchivedList(for cardID: String) -> Bool {
         guard routePath.count >= 2,
-              case .archived = routePath[routePath.count - 2],
+              let archiveRoute = routePath.dropLast().last,
               case .detail(let currentID) = routePath.last
         else { return false }
+        switch archiveRoute {
+        case .archived, .archivedZeroBalance: break
+        default: return false
+        }
         return currentID == cardID
     }
 }
@@ -2265,6 +2282,7 @@ enum Route: Hashable {
     case detail(String)
     case giftCardMall(String)
     case archived
+    case archivedZeroBalance
     case activity
     case settings
 }
@@ -2359,6 +2377,7 @@ struct RootView: View {
                             case .detail(let id): CardDetailView(cardID: id)
                             case .giftCardMall(let id): GiftCardMallRefreshView(cardID: id)
                             case .archived: ArchivedCardsView()
+                            case .archivedZeroBalance: ArchivedCardsView(initialZeroBalanceOnly: true)
                             case .activity: ActivityView()
                             case .settings: SettingsView()
                             }
@@ -2639,6 +2658,9 @@ struct CardListView: View {
                     .cardListRowStyle(verticalPadding: 8)
                 searchRow
                 filterRow
+                if selectedFilter == .zeroBalance {
+                    zeroBalanceArchiveInfo
+                }
 
                 if visibleCards.isEmpty {
                     emptyState
@@ -2828,42 +2850,101 @@ struct CardListView: View {
         .cardListRowStyle(verticalPadding: 2)
     }
 
+    @ViewBuilder
     private var emptyState: some View {
         let noCards = model.cards.isEmpty
         let allCardsArchived = !noCards && model.sortedActiveCards.isEmpty
-        return VaultSurface {
-            VStack(spacing: 16) {
-                VaultBrandMark(size: 82)
-                Text(noCards ? "No cards yet" : allCardsArchived ? "Your vault is archived" : "No matching cards")
-                    .font(.title2.bold())
-                Text(
-                    noCards
-                        ? "Add your first Visa or Mastercard prepaid card to start tracking balances and expiry dates."
-                        : allCardsArchived
-                            ? "Your archived cards are safe and can be restored whenever you need them."
-                            : "Try another filter, card name, network, or last four digits."
-                )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                if noCards {
-                    Button("Add Your First Card") { model.showPreferredAddFlow() }
-                        .accessibilityIdentifier("cards.empty.add")
-                        .vaultPrimaryButton()
-                } else if allCardsArchived {
-                    Button {
-                        model.showArchivedCards()
-                    } label: {
-                        Label("View Archived Cards", systemImage: "archivebox")
-                    }
-                    .accessibilityIdentifier("cards.empty.archived")
-                    .vaultPrimaryButton()
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 24)
+        let zeroBalanceActiveCards = model.sortedActiveCards.filter {
+            $0.balance?.isFinite == true && $0.balance == 0
         }
-        .cardListRowStyle()
+        if selectedFilter == .zeroBalance {
+            let description: String = {
+                if !searchText.isEmpty && !zeroBalanceActiveCards.isEmpty {
+                    return "No $0 cards match your search. Try another card name, network, or last four digits."
+                } else if model.settings.archiveZeroBalanceCardsAutomatically {
+                    return "$0 cards you choose to keep will appear here."
+                } else {
+                    return "$0 cards will appear here when a balance check reports no remaining funds."
+                }
+            }()
+            VaultSurface {
+                VStack(spacing: 16) {
+                    VaultBrandMark(size: 82)
+                    Text("No $0 cards here")
+                        .font(.title2.bold())
+                    Text(description)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+            }
+            .cardListRowStyle()
+        } else {
+            VaultSurface {
+                VStack(spacing: 16) {
+                    VaultBrandMark(size: 82)
+                    Text(noCards ? "No cards yet" : allCardsArchived ? "Your vault is archived" : "No matching cards")
+                        .font(.title2.bold())
+                    Text(
+                        noCards
+                            ? "Add your first Visa or Mastercard prepaid card to start tracking balances and expiry dates."
+                            : allCardsArchived
+                                ? "Your archived cards are safe and can be restored whenever you need them."
+                                : "Try another filter, card name, network, or last four digits."
+                    )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    if noCards {
+                        Button("Add Your First Card") { model.showPreferredAddFlow() }
+                            .accessibilityIdentifier("cards.empty.add")
+                            .vaultPrimaryButton()
+                    } else if allCardsArchived {
+                        Button {
+                            model.showArchivedCards()
+                        } label: {
+                            Label("View Archived Cards", systemImage: "archivebox")
+                        }
+                        .accessibilityIdentifier("cards.empty.archived")
+                        .vaultPrimaryButton()
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+            }
+            .cardListRowStyle()
+        }
+    }
+
+    private var zeroBalanceArchiveInfo: some View {
+        VaultSurface(padding: 12) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(
+                    model.settings.archiveZeroBalanceCardsAutomatically
+                        ? "$0 cards move to Archived Cards after a balance check. Cards you choose to keep remain here."
+                        : "$0 cards stay in your vault until you archive them."
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+                Button {
+                    model.showArchivedZeroBalanceCards()
+                } label: {
+                    Label("View Archived $0 Cards", systemImage: "archivebox")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(VaultTheme.electricBlue)
+                .accessibilityIdentifier("cards.zero.archived")
+                .accessibilityHint("Show archived cards with a $0 balance")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("cards.zero.archiveInfo")
+        .cardListRowStyle(verticalPadding: 4)
     }
 
     @ViewBuilder
@@ -3236,36 +3317,50 @@ struct CardListView: View {
 
 struct ArchivedCardsView: View {
     @Environment(AppModel.self) private var model
+    @State private var zeroBalanceOnly: Bool
     @State private var pendingDelete: VaultCard?
     @State private var isSelectingCards = false
     @State private var selectedCardIDs = Set<String>()
     @State private var isBulkDeleteConfirmationPresented = false
 
+    init(initialZeroBalanceOnly: Bool = false) {
+        _zeroBalanceOnly = State(initialValue: initialZeroBalanceOnly)
+    }
+
+    private var zeroBalanceArchivedCards: [VaultCard] {
+        model.sortedArchivedCards.filter { $0.balance?.isFinite == true && $0.balance == 0 }
+    }
+
+    private var displayedCards: [VaultCard] {
+        zeroBalanceOnly ? zeroBalanceArchivedCards : model.sortedArchivedCards
+    }
+
     var body: some View {
         ZStack {
             VaultBackground()
             List {
-                if model.sortedArchivedCards.isEmpty {
-                    emptyState
-                } else {
-                    Section {
-                        if isSelectingCards {
-                            bulkActionControls
-                                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 12, trailing: 20))
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
-                        }
+                archiveFilterRow
+                Section {
+                    if isSelectingCards && !displayedCards.isEmpty {
+                        bulkActionControls
+                            .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 12, trailing: 20))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    }
 
-                        ForEach(model.sortedArchivedCards) { card in
+                    if displayedCards.isEmpty {
+                        emptyState
+                    } else {
+                        ForEach(displayedCards) { card in
                             if isSelectingCards {
                                 cardSelectionRow(for: card)
                             } else {
                                 cardNavigationRow(for: card)
                             }
                         }
-                    } header: {
-                        selectionHeader
                     }
+                } header: {
+                    selectionHeader
                 }
             }
             .listStyle(.plain)
@@ -3304,9 +3399,34 @@ struct ArchivedCardsView: View {
         } message: {
             Text("This permanently removes the selected card metadata and secure credentials from this device.")
         }
+        .onChange(of: zeroBalanceOnly) { _, _ in
+            cancelSelection()
+        }
         .onDisappear {
             cancelSelection()
         }
+    }
+
+    private var archiveFilterRow: some View {
+        HStack(spacing: 8) {
+            archiveFilterButton(title: "All", isZeroBalanceOnly: false)
+            archiveFilterButton(title: "$0 Balance", isZeroBalanceOnly: true)
+        }
+        .cardListRowStyle(verticalPadding: 4)
+    }
+
+    private func archiveFilterButton(title: String, isZeroBalanceOnly: Bool) -> some View {
+        Button {
+            withAnimation(.snappy) {
+                zeroBalanceOnly = isZeroBalanceOnly
+            }
+        } label: {
+            VaultStatusPill(title: title, active: zeroBalanceOnly == isZeroBalanceOnly)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(isZeroBalanceOnly ? "archived.filter.zero" : "archived.filter.all")
+        .accessibilityLabel(title)
+        .accessibilityValue(zeroBalanceOnly == isZeroBalanceOnly ? "Selected" : "Not selected")
     }
 
     private var selectionHeader: some View {
@@ -3314,7 +3434,7 @@ struct ArchivedCardsView: View {
             Text(
                 isSelectingCards
                     ? "\(selectedCardIDs.count) Selected"
-                    : "\(model.sortedArchivedCards.count) archived card\(model.sortedArchivedCards.count == 1 ? "" : "s")"
+                    : "\(displayedCards.count) \(zeroBalanceOnly ? "archived $0 balance card" : "archived card")\(displayedCards.count == 1 ? "" : "s")"
             )
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.secondary)
@@ -3336,6 +3456,7 @@ struct ArchivedCardsView: View {
                 .font(.subheadline.weight(.semibold))
                 .accessibilityIdentifier("archived.bulk.select")
                 .accessibilityLabel("Select archived cards")
+                .disabled(displayedCards.isEmpty)
             }
         }
         .textCase(nil)
@@ -3441,9 +3562,13 @@ struct ArchivedCardsView: View {
                 Image(systemName: "archivebox")
                     .font(.system(size: 42, weight: .semibold))
                     .foregroundStyle(VaultTheme.electricBlue)
-                Text("No Archived Cards")
+                Text(zeroBalanceOnly ? "No archived $0 cards" : "No Archived Cards")
                     .font(.title2.bold())
-                Text("Cards you archive will live here until you restore or delete them.")
+                Text(
+                    zeroBalanceOnly
+                        ? "Archived cards with a $0 balance will appear here."
+                        : "Cards you archive will live here until you restore or delete them."
+                )
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
