@@ -162,16 +162,23 @@ struct CardInput: Equatable {
 
 struct NotificationPreferences: Codable, Equatable {
     var expiryWarning = true
-    var lowBalance = true
-    var balanceUpdated = false
-    var refreshFailed = true
     var privacyPreservingContent = true
+
+    init(expiryWarning: Bool = true, privacyPreservingContent: Bool = true) {
+        self.expiryWarning = expiryWarning
+        self.privacyPreservingContent = privacyPreservingContent
+    }
+    private enum CodingKeys: String, CodingKey { case expiryWarning, privacyPreservingContent }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        expiryWarning = try values.decodeIfPresent(Bool.self, forKey: .expiryWarning) ?? true
+        privacyPreservingContent = try values.decodeIfPresent(Bool.self, forKey: .privacyPreservingContent) ?? true
+    }
 }
 
 struct AppSettings: Codable, Equatable {
     var onboardingCompleted = false
     var appLockEnabled = false
-    var analyticsEnabled = false
     var sortOption = CardSortOption.dateAddedNewest
     var notificationPreferences = NotificationPreferences()
     var addCardPreference = AddCardPreference.scan
@@ -181,7 +188,6 @@ struct AppSettings: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case onboardingCompleted
         case appLockEnabled
-        case analyticsEnabled
         case sortOption
         case notificationPreferences
         case addCardPreference
@@ -195,7 +201,6 @@ struct AppSettings: Codable, Equatable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         onboardingCompleted = try values.decodeIfPresent(Bool.self, forKey: .onboardingCompleted) ?? false
         appLockEnabled = try values.decodeIfPresent(Bool.self, forKey: .appLockEnabled) ?? false
-        analyticsEnabled = try values.decodeIfPresent(Bool.self, forKey: .analyticsEnabled) ?? false
         sortOption = try values.decodeIfPresent(CardSortOption.self, forKey: .sortOption) ?? .dateAddedNewest
         notificationPreferences = try values.decodeIfPresent(NotificationPreferences.self, forKey: .notificationPreferences) ?? NotificationPreferences()
         addCardPreference = try values.decodeIfPresent(AddCardPreference.self, forKey: .addCardPreference) ?? .scan
@@ -563,9 +568,29 @@ protocol CardScanning {
     func extractCandidates(from text: String) -> ScanCandidate
 }
 
+@MainActor
 protocol NotificationScheduling {
     func requestAuthorization() async
     func syncForCard(_ card: VaultCard, preferences: NotificationPreferences) async
+    func synchronize(cards: [VaultCard], preferences: NotificationPreferences) async
+    func scheduleUseReminder(for card: VaultCard, at date: Date) async throws
+    func cancelUseReminder(cardID: String) async
+    func useReminders() -> [String: CardUseReminder]
+    func notificationsEnabled() async -> Bool
+    func consumePendingReminderCardID() -> String?
+}
+
+extension NotificationScheduling {
+    func synchronize(cards: [VaultCard], preferences: NotificationPreferences) async {
+        for card in cards { await syncForCard(card, preferences: preferences) }
+    }
+    func scheduleUseReminder(for card: VaultCard, at date: Date) async throws {
+        throw VaultError.validation("Reminders are unavailable.")
+    }
+    func cancelUseReminder(cardID: String) async {}
+    func useReminders() -> [String: CardUseReminder] { [:] }
+    func notificationsEnabled() async -> Bool { false }
+    func consumePendingReminderCardID() -> String? { nil }
 }
 
 final class KeychainCredentialStore: CredentialStore {
@@ -914,59 +939,6 @@ final class LocalAuthenticationService: BiometricAuthenticating {
 
 struct AlwaysAllowAuthenticationService: BiometricAuthenticating {
     func authenticate(reason: String) async -> Bool { true }
-}
-
-struct NoopNotificationService: NotificationScheduling {
-    func requestAuthorization() async {}
-    func syncForCard(_ card: VaultCard, preferences: NotificationPreferences) async {}
-}
-
-final class NotificationService: NSObject, NotificationScheduling, UNUserNotificationCenterDelegate {
-    private let center = UNUserNotificationCenter.current()
-
-    func requestAuthorization() async {
-        _ = try? await center.requestAuthorization(options: [.alert, .badge, .sound])
-    }
-
-    func syncForCard(_ card: VaultCard, preferences: NotificationPreferences) async {
-        if preferences.lowBalance, let balance = card.balance, balance < 10, card.fetchFailureCount == 0 {
-            await addNotification(id: "\(card.id).low", title: "A saved card may need attention", body: "Open VaultCard to review a low balance.")
-        }
-        if preferences.refreshFailed, card.fetchFailureCount >= 2 {
-            await addNotification(id: "\(card.id).refreshFailed", title: "A saved card may need attention", body: "Open VaultCard to retry a failed refresh.")
-        }
-        if preferences.expiryWarning {
-            await scheduleExpiry(card)
-        }
-    }
-
-    private func scheduleExpiry(_ card: VaultCard) async {
-        guard let expiryDate = resolveExpiryDate(card.expiry) else { return }
-        for days in [30, 7] {
-            let date = expiryDate.addingTimeInterval(TimeInterval(-days * 24 * 60 * 60))
-            guard date > Date() else { continue }
-            let content = UNMutableNotificationContent()
-            content.title = "A saved card may need attention"
-            content.body = "Open VaultCard to review an upcoming expiry."
-            content.sound = .default
-            let trigger = UNCalendarNotificationTrigger(dateMatching: Calendar.current.dateComponents([.year, .month, .day, .hour], from: date), repeats: false)
-            try? await center.add(UNNotificationRequest(identifier: "\(card.id).expiry.\(days)", content: content, trigger: trigger))
-        }
-    }
-
-    private func addNotification(id: String, title: String, body: String) async {
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        content.sound = .default
-        try? await center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
-    }
-
-    private func resolveExpiryDate(_ expiry: String) -> Date? {
-        let parts = expiry.split(separator: "/").compactMap { Int($0) }
-        guard parts.count == 2 else { return nil }
-        return Calendar.current.date(from: DateComponents(year: 2000 + parts[1], month: parts[0] + 1, day: 0, hour: 12))
-    }
 }
 
 struct GiftCardMallSummaryCapture: Equatable {
@@ -1839,6 +1811,9 @@ final class AppModel {
     var isAuthenticating = false
     var alertMessage: String?
     var zeroBalancePrompt: ZeroBalancePrompt?
+    var useReminders: [String: CardUseReminder] = [:]
+    var notificationsAllowed: Bool?
+    private var notificationSyncTask: Task<Void, Never>?
     private var foregroundRefreshIDs: [String: UUID] = [:]
     private var completedZeroBalanceRefreshIDs: [String: UUID] = [:]
     private var automaticArchiveRefreshIDs: [String: UUID] = [:]
@@ -1870,15 +1845,58 @@ final class AppModel {
         hasStarted = true
         reloadCards()
         await unlockIfNeeded()
-        Task { await environment.notificationService.requestAuthorization() }
+        await synchronizeNotifications()
+        if let id = environment.notificationService.consumePendingReminderCardID() { openReminderCard(id: id) }
     }
 
     func reloadCards() {
         do {
             cards = try environment.cardRepository.getCards()
+            queueNotificationSync()
         } catch {
             alertMessage = error.localizedDescription
         }
+    }
+
+    func synchronizeNotifications() async {
+        await environment.notificationService.synchronize(cards: cards, preferences: settings.notificationPreferences)
+        useReminders = environment.notificationService.useReminders()
+        notificationsAllowed = await environment.notificationService.notificationsEnabled()
+    }
+
+    private func queueNotificationSync() {
+        notificationSyncTask?.cancel()
+        notificationSyncTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+            guard !Task.isCancelled, let self else { return }
+            await self.synchronizeNotifications()
+        }
+    }
+
+    func requestNotificationAuthorization() async {
+        await environment.notificationService.requestAuthorization()
+        await synchronizeNotifications()
+    }
+
+    func scheduleUseReminder(cardID: String, at date: Date) async throws {
+        guard let card = cards.first(where: { $0.id == cardID }), !card.isArchived,
+              let balance = card.balance, balance.isFinite, balance > 0, balance < 10 else {
+            throw VaultError.validation("Reminders are available for active cards with a balance below $10.")
+        }
+        try await environment.notificationService.scheduleUseReminder(for: card, at: date)
+        useReminders = environment.notificationService.useReminders()
+        notificationsAllowed = await environment.notificationService.notificationsEnabled()
+    }
+
+    func cancelUseReminder(cardID: String) async {
+        await environment.notificationService.cancelUseReminder(cardID: cardID)
+        useReminders = environment.notificationService.useReminders()
+    }
+
+    func openReminderCard(id: String) {
+        guard cards.contains(where: { $0.id == id }) else { return }
+        _ = environment.notificationService.consumePendingReminderCardID()
+        routePath = [.detail(id)]
     }
 
     func completeOnboarding() {
@@ -2185,6 +2203,7 @@ final class AppModel {
 
     private func saveSettings() {
         environment.settingsRepository.save(settings)
+        queueNotificationSync()
     }
 
     private func popDetailIfNeeded(for cardID: String) {
@@ -2354,11 +2373,17 @@ struct RootView: View {
                 Text(model.alertMessage ?? "")
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .vaultcardOpenReminderCard)) { notification in
+            if let id = notification.object as? String { model.openReminderCard(id: id) }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .inactive || phase == .background {
                 model.lockForBackground()
             } else if phase == .active {
-                Task { await model.unlockIfNeeded() }
+                Task {
+                    await model.unlockIfNeeded()
+                    await model.synchronizeNotifications()
+                }
             }
         }
     }
@@ -3483,6 +3508,7 @@ struct CardRow: View {
 
     var body: some View {
         let isKnownZeroBalance = !card.isArchived && card.balance?.isFinite == true && card.balance == 0
+        let isLowBalance = !card.isArchived && card.balance?.isFinite == true && (card.balance ?? 0) > 0 && (card.balance ?? 10) < 10
         HStack(spacing: 12) {
             VaultNetworkRowIcon(network: card.network)
             VStack(alignment: .leading, spacing: 3) {
@@ -3496,14 +3522,14 @@ struct CardRow: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(isKnownZeroBalance ? .secondary : .primary)
                             .fixedSize()
-                        if isKnownZeroBalance {
-                            Text("No funds")
+                        if isKnownZeroBalance || isLowBalance {
+                            Text(isKnownZeroBalance ? "No funds" : "Low balance")
                                 .font(.caption2.weight(.medium))
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
                                 .background(.quaternary, in: Capsule())
-                                .accessibilityLabel("No funds")
+                                .accessibilityLabel(isKnownZeroBalance ? "No funds" : "Low balance")
                         }
                     }
                     .fixedSize()
@@ -4319,6 +4345,7 @@ struct CardDetailView: View {
     @State private var confirmDelete = false
     @State private var showCVVEditor = false
     @State private var needsCVV = false
+    @State private var showUseReminder = false
 
     var card: VaultCard? { model.cards.first { $0.id == cardID } }
 
@@ -4373,6 +4400,13 @@ struct CardDetailView: View {
         .sheet(isPresented: $showCVVEditor) {
             AddMissingCVVView(cardID: cardID) { needsCVV = false }
         }
+        .sheet(isPresented: $showUseReminder) {
+            if let card {
+                CardUseReminderView(card: card, reminder: model.useReminders[cardID]) { date in
+                    try await model.scheduleUseReminder(cardID: cardID, at: date)
+                }
+            }
+        }
         .onDisappear { clearReveal() }
     }
 
@@ -4393,6 +4427,11 @@ struct CardDetailView: View {
                 .accessibilityIdentifier("detail.addCVV")
             }
             topActions(card)
+            LowBalanceCardPanel(card: card, reminder: model.useReminders[cardID], onRemind: {
+                showUseReminder = true
+            }, onCancel: {
+                Task { await model.cancelUseReminder(cardID: cardID) }
+            })
             failureBanner(card)
             transactionPanel(card)
             Label("Secure details never leave your device.", systemImage: "lock.fill")
@@ -4553,6 +4592,8 @@ struct GiftCardMallRefreshView: View {
     @State private var isBrowserReady = false
     @State private var preparationError: String?
     @State private var pageLoadFailed = false
+    @State private var showUseReminder = false
+    @State private var showBalanceSaved = false
 
     var body: some View {
         ZStack {
@@ -4635,7 +4676,41 @@ struct GiftCardMallRefreshView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            if let summary, !pageLoadFailed, showBalanceSaved || canOfferUseReminder {
+                VStack(alignment: .leading, spacing: 8) {
+                    if showBalanceSaved {
+                        Label("Balance saved: \(summary.balance.formatted(.currency(code: "USD")))", systemImage: "checkmark.circle.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .accessibilityIdentifier("balance.saved")
+                    }
+                    if let card = model.cards.first(where: { $0.id == cardID }), !card.isArchived,
+                       let balance = card.balance, balance > 0, balance < 10 {
+                        Button(model.useReminders[cardID] == nil ? "Remind me to use this" : "Edit reminder") { showUseReminder = true }
+                            .accessibilityIdentifier("reminder.open")
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+            }
+        }
+        .sheet(isPresented: $showUseReminder) {
+            if let card = model.cards.first(where: { $0.id == cardID }) {
+                CardUseReminderView(card: card, reminder: model.useReminders[cardID]) { date in
+                    try await model.scheduleUseReminder(cardID: cardID, at: date)
+                }
+            }
+        }
         .navigationTitle("Check Balance")
+        .task(id: summary?.balance) {
+            guard summary != nil else { showBalanceSaved = false; return }
+            showBalanceSaved = true
+            do { try await Task.sleep(for: .seconds(4)) } catch { return }
+            showBalanceSaved = false
+        }
         .task { await prepareBrowserAfterTransition() }
         .onDisappear { credentials = nil }
         .toolbar {
@@ -4659,6 +4734,12 @@ struct GiftCardMallRefreshView: View {
                 .disabled(!isBrowserReady)
             }
         }
+    }
+
+    private var canOfferUseReminder: Bool {
+        guard let card = model.cards.first(where: { $0.id == cardID }), !card.isArchived,
+              let balance = card.balance else { return false }
+        return balance.isFinite && balance > 0 && balance < 10
     }
 
     private func reloadPage() {
@@ -4741,7 +4822,7 @@ struct GiftCardMallWebView: UIViewRepresentable {
                 coordinator.onLoadingChange(false)
                 coordinator.onNavigationError(true)
             }
-        } else if arguments.contains("--ui-testing") && arguments.contains("--ui-testing-zero-refresh") {
+        } else if arguments.contains("--ui-testing") && (arguments.contains("--ui-testing-zero-refresh") || arguments.contains("--ui-testing-low-refresh")) {
             let coordinator = context.coordinator
             let trustedURL = GiftCardMallBridge.balanceURL(for: network)
             let message: [String: Any] = [
@@ -4749,7 +4830,7 @@ struct GiftCardMallWebView: UIViewRepresentable {
                 "parserVersion": GiftCardMallBridge.parserVersion,
                 "pageHost": trustedURL.host ?? "",
                 "kind": "domBalance",
-                "balance": 0
+                "balance": arguments.contains("--ui-testing-low-refresh") ? 3.99 : 0
             ]
             DispatchQueue.main.async {
                 coordinator.onLoadingChange(false)
@@ -5169,22 +5250,32 @@ struct SettingsView: View {
                     Toggle(isOn: Binding(get: { model.settings.appLockEnabled }, set: { value in model.updateSettings { $0.appLockEnabled = value } })) {
                         Label("App Lock", systemImage: "lock.fill")
                     }
-                    Toggle(isOn: Binding(get: { model.settings.analyticsEnabled }, set: { value in model.updateSettings { $0.analyticsEnabled = value } })) {
-                        Label("Private Analytics", systemImage: "chart.bar.fill")
-                    }
                 }
-                Section("Alerts") {
-                    Toggle(isOn: Binding(get: { model.settings.notificationPreferences.expiryWarning }, set: { value in model.updateSettings { $0.notificationPreferences.expiryWarning = value } })) {
+                Section("Notifications") {
+                    Toggle(isOn: Binding(get: { model.settings.notificationPreferences.expiryWarning }, set: { value in
+                        model.updateSettings { $0.notificationPreferences.expiryWarning = value }
+                        if value { Task { await model.requestNotificationAuthorization() } }
+                    })) {
                         Label("Expiry warnings", systemImage: "calendar.badge.exclamationmark")
                     }
-                    Toggle(isOn: Binding(get: { model.settings.notificationPreferences.lowBalance }, set: { value in model.updateSettings { $0.notificationPreferences.lowBalance = value } })) {
-                        Label("Low balance alerts", systemImage: "exclamationmark.circle.fill")
-                    }
-                    Toggle(isOn: Binding(get: { model.settings.notificationPreferences.balanceUpdated }, set: { value in model.updateSettings { $0.notificationPreferences.balanceUpdated = value } })) {
-                        Label("Balance updated", systemImage: "arrow.clockwise.circle.fill")
-                    }
-                    Toggle(isOn: Binding(get: { model.settings.notificationPreferences.refreshFailed }, set: { value in model.updateSettings { $0.notificationPreferences.refreshFailed = value } })) {
-                        Label("Refresh failed", systemImage: "wifi.exclamationmark")
+                    .accessibilityIdentifier("settings.expiryWarnings")
+                    Text("Reminders 30 and 7 days before an active card expires. No balance refresh is needed.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("For a saved balance below $10, open the card and choose ‘Remind me to use this’ to set a one-time reminder.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if model.notificationsAllowed == false {
+                        Button("Enable Notifications") {
+                            Task {
+                                await model.requestNotificationAuthorization()
+                                if model.notificationsAllowed == false,
+                                   let url = URL(string: UIApplication.openNotificationSettingsURLString) {
+                                    await UIApplication.shared.open(url)
+                                }
+                            }
+                        }
+                        .accessibilityIdentifier("settings.enableNotifications")
                     }
                 }
                 Section("Privacy") {
