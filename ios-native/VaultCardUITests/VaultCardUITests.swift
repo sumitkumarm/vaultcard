@@ -472,7 +472,57 @@ final class VaultCardUITests: XCTestCase {
         let popup = app.alerts.firstMatch
         XCTAssertTrue(popup.waitForExistence(timeout: 5))
         popup.buttons["cards.archiveZero.confirm"].firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["No matching cards"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["No $0 cards here"].waitForExistence(timeout: 5))
+    }
+
+    func testZeroFilterLinksToOnlyArchivedZeroCardsAndCanShowAll() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-seed-activity", "--ui-testing-seed-zero-card", "--ui-testing-seed-archived-cards"]
+        app.launch()
+        let zeroFilter = app.buttons["cards.filter.$0-balance"]
+        XCTAssertTrue(zeroFilter.waitForExistence(timeout: 5))
+        if !zeroFilter.isHittable { app.scrollViews.firstMatch.swipeLeft() }
+        zeroFilter.tap()
+        XCTAssertTrue(app.staticTexts["No $0 cards here"].waitForExistence(timeout: 5))
+        let hint = XCTAttachment(screenshot: app.screenshot())
+        hint.name = "Zero filter explains automatic archiving"
+        hint.lifetime = .keepAlways
+        add(hint)
+        app.buttons["cards.zero.archived"].tap()
+        XCTAssertTrue(app.navigationBars["Archived Cards"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Test Aurora"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Test Atlas"].exists)
+        let archive = XCTAttachment(screenshot: app.screenshot())
+        archive.name = "Archived zero balance cards only"
+        archive.lifetime = .keepAlways
+        add(archive)
+        app.buttons["archived.filter.all"].tap()
+        XCTAssertTrue(app.staticTexts["Test Atlas"].waitForExistence(timeout: 5))
+        app.buttons["archived.bulk.select"].tap()
+        app.buttons["Select Test Atlas"].tap()
+        app.buttons["archived.filter.zero"].tap()
+        XCTAssertFalse(app.buttons["archived.bulk.cancel"].exists)
+        XCTAssertFalse(app.staticTexts["Test Atlas"].exists)
+        XCTAssertTrue(app.staticTexts["Test Aurora"].exists)
+    }
+
+    func testZeroFilterKeepsUnarchivedCardsAndExplainsDisabledSetting() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-seed-activity", "--ui-testing-seed-zero-card"]
+        app.launch()
+        app.buttons["tray.settings"].tap()
+        let toggle = app.switches["Archive $0 cards automatically"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        app.buttons["tray.vault"].tap()
+        let zeroFilter = app.buttons["cards.filter.$0-balance"]
+        if !zeroFilter.isHittable { app.scrollViews.firstMatch.swipeLeft() }
+        zeroFilter.tap()
+        XCTAssertTrue(app.staticTexts["Test Aurora"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["$0 cards stay in your vault until you archive them."].exists)
+        app.buttons["cards.zero.archived"].tap()
+        XCTAssertTrue(app.staticTexts["No archived $0 cards"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["archived.filter.all"].exists)
     }
 
     func testCreditsAndDebitsAppearDistinctlyInActivityAndDetail() throws {
