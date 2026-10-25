@@ -704,15 +704,40 @@ final class VaultCardTests: XCTestCase {
             notificationService: NoopNotificationService(), scanner: StaticCardScanner())
         let model = AppModel(environment: environment)
         do {
-            _ = try model.addBulkCards([validInput(), validInput()])
+            _ = try model.addBulkCards([validInput(), CardInput(cardNumber: "5555555555554444", expiry: "09/29", cvv: "123")])
             XCTFail("Expected second save to fail")
         } catch let error as BulkCardSaveError {
             XCTAssertEqual(error.savedIDs.count, 1)
         }
         XCTAssertEqual(try repository.getCards().count, 1)
         XCTAssertEqual(store.records.count, 1)
-        _ = try model.addBulkCards([validInput()])
+        _ = try model.addBulkCards([CardInput(cardNumber: "5555555555554444", expiry: "09/29", cvv: "123")])
         XCTAssertEqual(try repository.getCards().count, 2)
+    }
+
+    func testBulkPartialFailureIdentifiesSavedRowsWithoutDiscardingEarlierInvalidRow() throws {
+        let container = try ModelContainerFactory.makeInMemory()
+        let store = FakeCredentialStore()
+        var writes = 0
+        let repository = SwiftDataCardRepository(context: ModelContext(container), credentialStore: store,
+            beforeMetadataSave: {
+                writes += 1
+                if writes == 2 { throw VaultError.validation("Storage unavailable") }
+            })
+        let model = AppModel(environment: AppEnvironment(cardRepository: repository,
+            settingsRepository: InMemorySettingsRepository(), biometricService: AlwaysAllowAuthenticationService(),
+            notificationService: NoopNotificationService(), scanner: StaticCardScanner()))
+        let rows = BulkCardParser.parse("4000000000000003,09/29,123\n4111111111111111,09/29,123\n5555555555554444,09/29,123")
+        do {
+            _ = try model.saveBulkRows(rows)
+            XCTFail("Expected second write to fail")
+        } catch let error as BulkCardSaveError {
+            XCTAssertEqual(error.savedRowIDs, [rows[1].id])
+            XCTAssertEqual(error.savedIDs.count, 1)
+            XCTAssertTrue(error.duplicateRowIDs.isEmpty)
+        }
+        XCTAssertEqual(model.cards.count, 1)
+        XCTAssertEqual(store.records.count, 1)
     }
 
     private func validInput(nickname: String = "Test") -> CardInput {

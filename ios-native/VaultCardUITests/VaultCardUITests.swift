@@ -271,6 +271,9 @@ final class VaultCardUITests: XCTestCase {
         beforeSave.lifetime = .keepAlways
         add(beforeSave)
         confirm.tap()
+        let completion = app.alerts["Bulk capture complete"]
+        XCTAssertTrue(completion.waitForExistence(timeout: 5))
+        completion.buttons["OK"].tap()
         XCTAssertTrue(app.navigationBars["Vault"].waitForExistence(timeout: 5))
         let expand = app.buttons["cards.stack.expand"]
         if expand.waitForExistence(timeout: 3), expand.isHittable { expand.tap() }
@@ -288,6 +291,49 @@ final class VaultCardUITests: XCTestCase {
         app.buttons["missingCVV.save"].tap()
         XCTAssertTrue(app.buttons["detail.refresh"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["detail.addCVV"].exists)
+    }
+
+    func testBulkReviewSkipsDuplicatesAndSavesValidRowsBeforeManualConfirmation() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-bulk-mixed"]
+        app.launch()
+        app.buttons["cards.add"].firstMatch.tap()
+        let bulk = app.buttons["add.bulk"]
+        for _ in 0..<3 where !bulk.isHittable { app.scrollViews.firstMatch.swipeUp() }
+        bulk.tap()
+        let confirm = app.buttons["bulk.confirm"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        XCTAssertEqual(confirm.label, "Confirm & Add 1 Card")
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "Already in vault")).count, 2)
+        XCTAssertTrue(app.staticTexts["Repeated in this import"].exists)
+        XCTAssertTrue(app.staticTexts["Check card number"].exists)
+        XCTAssertFalse(app.textFields["bulk.row.1.number"].exists)
+        let review = XCTAttachment(screenshot: app.screenshot())
+        review.name = "Compact bulk review with duplicates and invalid number"
+        review.lifetime = .keepAlways
+        add(review)
+        for _ in 0..<3 where !confirm.isHittable { app.scrollViews.firstMatch.swipeUp() }
+        confirm.tap()
+        let partial = app.alerts["Cards added; review remains"]
+        XCTAssertTrue(partial.waitForExistence(timeout: 5))
+        XCTAssertTrue(partial.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Added 1 cards; skipped 3")).firstMatch.exists)
+        partial.buttons["OK"].tap()
+        XCTAssertEqual(confirm.label, "Confirm & Add 0 Cards")
+        XCTAssertFalse(confirm.isEnabled)
+        let edit = app.buttons["bulk.edit.4"]
+        if !edit.isHittable { app.scrollViews.firstMatch.swipeDown() }
+        edit.tap()
+        let confirmation = app.switches["bulk.row.4.confirmNumber"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        XCTAssertEqual(confirmation.value as? String, "0")
+        confirmation.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        app.navigationBars["Edit card"].buttons["Done"].tap()
+        XCTAssertEqual(confirm.label, "Confirm & Add 1 Card")
+        confirm.tap()
+        let complete = app.alerts["Bulk capture complete"]
+        XCTAssertTrue(complete.waitForExistence(timeout: 5))
+        complete.buttons["OK"].tap()
+        XCTAssertTrue(app.navigationBars["Vault"].waitForExistence(timeout: 5))
     }
 
     func testEmptyBulkCaptureFitsWithoutScrolling() throws {

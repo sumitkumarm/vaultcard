@@ -10,6 +10,11 @@ struct BulkCardCaptureView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var rows: [BulkCardRow] = []
+    @State private var existingNumbers: Set<String> = []
+    @State private var existingNumberLookupError: String?
+    @State private var isLoadingExistingNumbers = false
+    @State private var didAttemptExistingNumberLookup = false
+    @State private var editingRow: BulkCardRow?
     @State private var isCameraPresented = false
     @State private var isPhotoPickerPresented = false
     @State private var isFileImporterPresented = false
@@ -18,6 +23,10 @@ struct BulkCardCaptureView: View {
     @State private var isPrivacyShieldVisible = false
     @State private var showError = false
     @State private var showCameraMessage = false
+    @State private var showSaveSummary = false
+    @State private var saveSummaryTitle = ""
+    @State private var saveSummaryMessage = ""
+    @State private var shouldLeaveAfterSaveSummary = false
     @State private var errorMessage = ""
     @State private var cameraMessage = ""
     @State private var pastedText = ""
@@ -26,6 +35,30 @@ struct BulkCardCaptureView: View {
     @State private var didLoadUITestFixture = false
 
     private let importTypes: [UTType] = [.image, .commaSeparatedText, .tabSeparatedText, .plainText]
+
+    private var reviewedRows: [(row: BulkCardRow, status: BulkCardReviewStatus)] {
+        var precedingNumbers = Set<String>()
+        return rows.map { row in
+            let status = BulkCardReview.status(
+                for: row,
+                existingNumbers: existingNumbers,
+                precedingNumbers: precedingNumbers
+            )
+            let number = CardRules.digitsOnly(row.cardNumber)
+            if status == .ready, !number.isEmpty { precedingNumbers.insert(number) }
+            return (row: row, status: status)
+        }
+    }
+
+    private var eligibleCount: Int { reviewedRows.filter { $0.status.canSave }.count }
+    private var existingCount: Int { reviewedRows.filter { $0.status == .existing }.count }
+    private var duplicateCount: Int { reviewedRows.filter { $0.status == .duplicate }.count }
+    private var needsReviewCount: Int {
+        reviewedRows.filter {
+            if case .needsReview = $0.status { return true }
+            return false
+        }.count
+    }
 
     var body: some View {
         ZStack {
@@ -123,6 +156,12 @@ struct BulkCardCaptureView: View {
             )
             .ignoresSafeArea()
         }
+        .sheet(item: $editingRow) { row in
+            BulkCardEditSheet(
+                row: binding(for: row),
+                onDelete: { removeRow(withID: row.id) }
+            )
+        }
         .alert("Bulk capture", isPresented: $showError) {
             Button("OK", role: .cancel) { }
         } message: {
@@ -141,6 +180,14 @@ struct BulkCardCaptureView: View {
         } message: {
             Text(cameraMessage)
         }
+        .alert(saveSummaryTitle, isPresented: $showSaveSummary) {
+            Button("OK") {
+                if shouldLeaveAfterSaveSummary { model.routePath = [] }
+            }
+        } message: {
+            Text(saveSummaryMessage)
+                .accessibilityIdentifier("bulk.save.summary")
+        }
         .onChange(of: selectedPhotos) { _, newItems in
             importPhotos(newItems)
         }
@@ -153,6 +200,7 @@ struct BulkCardCaptureView: View {
         .onAppear {
             isPrivacyShieldVisible = scenePhase != .active
             loadUITestFixtureIfNeeded()
+            if !didAttemptExistingNumberLookup { loadExistingNumbers() }
         }
         .onDisappear {
             recognitionTask?.cancel()
@@ -270,7 +318,6 @@ struct BulkCardCaptureView: View {
         }
     }
 
-    @ViewBuilder
     private var reviewSection: some View {
         VStack(alignment: .leading, spacing: 11) {
             HStack(alignment: .firstTextBaseline) {
@@ -283,28 +330,30 @@ struct BulkCardCaptureView: View {
                     .accessibilityIdentifier("bulk.review.count")
             }
 
-            if rows.isEmpty {
-                VaultSurface(padding: 18) {
-                    VStack(spacing: 9) {
-                        Image(systemName: "rectangle.stack.badge.plus")
-                            .font(.title2)
-                            .foregroundStyle(VaultTheme.electricBlue)
-                        Text("No cards yet")
+            if let existingNumberLookupError {
+                VaultSurface(padding: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Couldn’t check for cards already in your vault", systemImage: "exclamationmark.triangle.fill")
                             .font(.subheadline.weight(.semibold))
-                        Text("Take a photo, choose images, import a file, or paste rows to begin.")
+                            .foregroundStyle(VaultTheme.danger)
+                        Text(existingNumberLookupError)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
+                        Button {
+                            loadExistingNumbers()
+                        } label: {
+                            Label("Try again", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isLoadingExistingNumbers)
+                        .accessibilityIdentifier("bulk.existing.retry")
                     }
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-            } else {
-                ForEach(rows) { row in
-                    cardEditor(row: binding(for: row))
-                }
+                .accessibilityIdentifier("bulk.existing.error")
             }
 
-            if rows.contains(where: { $0.input.cvv.isEmpty }) {
+            if reviewedRows.contains(where: { $0.status != .existing && $0.status != .duplicate && $0.row.input.cvv.isEmpty }) {
                 Label("Some cards have no CVV. Add CVV later from the card to manage it.", systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(VaultTheme.warning)
@@ -312,20 +361,37 @@ struct BulkCardCaptureView: View {
                     .accessibilityIdentifier("bulk.missingCVV.warning")
             }
 
+            ForEach(rows) { row in
+                compactReviewRow(row)
+            }
+
+            if !rows.isEmpty {
+                HStack(spacing: 8) {
+                    reviewCount("\(eligibleCount) ready", color: VaultTheme.success)
+                    reviewCount("\(existingCount) existing", color: .secondary)
+                    reviewCount("\(duplicateCount) repeated", color: VaultTheme.warning)
+                    reviewCount("\(needsReviewCount) review", color: VaultTheme.danger)
+                }
+                .font(.caption2.weight(.medium))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("bulk.review.summary")
+            }
+
             Button {
                 saveCards()
             } label: {
                 HStack(spacing: 8) {
-                    if isSaving { ProgressView().tint(.white) }
-                    Text(isSaving ? "Adding Cards…" : "Confirm & Add \(rows.count) \(rows.count == 1 ? "Card" : "Cards")")
+                    if isSaving || isLoadingExistingNumbers { ProgressView().tint(.white) }
+                    Text(isSaving ? "Adding Cards…" : "Confirm & Add \(eligibleCount) \(eligibleCount == 1 ? "Card" : "Cards")")
                 }
                 .frame(maxWidth: .infinity)
             }
             .font(.headline)
             .controlSize(.large)
             .vaultPrimaryButton()
-            .disabled(rows.isEmpty || rows.contains(where: { blockingIssue(for: $0) != nil }) || isSaving || isRecognizing)
-            .opacity(rows.isEmpty || rows.contains(where: { blockingIssue(for: $0) != nil }) ? 0.55 : 1)
+            .disabled(rows.isEmpty || eligibleCount == 0 || existingNumberLookupError != nil || isLoadingExistingNumbers || isSaving || isRecognizing)
+            .opacity(rows.isEmpty || eligibleCount == 0 || existingNumberLookupError != nil ? 0.55 : 1)
             .accessibilityIdentifier("bulk.confirm")
         }
     }
@@ -341,132 +407,177 @@ struct BulkCardCaptureView: View {
         )
     }
 
-    private func cardEditor(row: Binding<BulkCardRow>) -> some View {
-        let value = row.wrappedValue
-        let issue = displayIssue(for: value)
-        return VaultSurface(padding: 14) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(CardRules.inferNetwork(value.cardNumber).displayName)
-                            .font(.subheadline.weight(.semibold))
+    private func compactReviewRow(_ row: BulkCardRow) -> some View {
+        let status = reviewStatus(for: row)
+        let digits = CardRules.digitsOnly(row.cardNumber)
+        let invalidNumber = !CardRules.isValidCardNumber(row.cardNumber)
+        let rowStatusColor = invalidNumber ? VaultTheme.warning : reviewColor(for: status)
+        let badge = invalidNumber && row.numberConfirmed && status == .ready ? "Checked" : reviewBadge(for: status)
+        return VaultSurface(padding: 7) {
+            HStack(spacing: 8) {
+                VaultNetworkRowIcon(network: CardRules.inferNetwork(row.cardNumber))
+                    .frame(width: 32, height: 32)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(digits.isEmpty ? "No number" : digits)
+                        .font(.system(size: 15, weight: .medium, design: .monospaced))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("bulk.row.\(row.sourceRow).number.value")
+                    HStack(spacing: 9) {
+                        Text(row.expiry.isEmpty ? "—/——" : row.expiry)
+                            .accessibilityIdentifier("bulk.row.\(row.sourceRow).expiry.value")
+                        Text("\(row.codeIsPIN ? "PIN" : "CVV") \(row.code.isEmpty ? "—" : row.code)")
+                            .accessibilityLabel("\(row.codeIsPIN ? "PIN" : "CVV") \(row.code.isEmpty ? "missing" : row.code)")
                     }
-                    Spacer()
-                    Button(role: .destructive) {
-                        rows.removeAll { $0.id == value.id }
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                }
+                .layoutPriority(1)
+                Spacer(minLength: 0)
+                HStack(spacing: 4) {
+                    Text(badge)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 4)
+                        .foregroundStyle(rowStatusColor)
+                        .background(rowStatusColor.opacity(0.11), in: Capsule())
+                        .accessibilityLabel(status.message ?? (invalidNumber ? "Number checked; ready to add" : "Ready to add"))
+                    Button {
+                        editingRow = row
                     } label: {
-                        Image(systemName: "trash")
-                            .font(.body.weight(.medium))
-                            .frame(width: 36, height: 36)
+                        Image(systemName: "pencil")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(VaultTheme.electricBlue)
+                            .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Remove card ending in \(CardRules.digitsOnly(value.cardNumber).suffix(4))")
-                    .accessibilityIdentifier("bulk.remove.\(value.sourceRow)")
-                }
-
-                field(title: "Card number", accessibilityID: "bulk.row.\(value.sourceRow).number") {
-                    TextField("16-digit card number", text: row.cardNumber)
-                        .keyboardType(.numberPad)
-                        .textContentType(.creditCardNumber)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .onChange(of: row.wrappedValue.cardNumber) { _, newValue in
-                            row.wrappedValue.cardNumber = String(CardRules.digitsOnly(newValue).prefix(16))
-                        }
-                }
-
-                HStack(spacing: 12) {
-                    field(title: "Expiry", accessibilityID: "bulk.row.\(value.sourceRow).expiry") {
-                        TextField("MM/YY", text: row.expiry)
-                            .keyboardType(.numberPad)
-                            .textContentType(.none)
-                            .onChange(of: row.wrappedValue.expiry) { _, newValue in
-                                row.wrappedValue.expiry = CardRules.formatExpiryInput(newValue)
-                            }
-                    }
-                    field(title: row.wrappedValue.codeIsPIN ? "PIN" : "CVV", accessibilityID: "bulk.row.\(value.sourceRow).code") {
-                        TextField(row.wrappedValue.codeIsPIN ? "Optional PIN" : "Optional CVV", text: row.code)
-                            .keyboardType(.numberPad)
-                            .textContentType(.none)
-                            .onChange(of: row.wrappedValue.code) { _, newValue in
-                                row.wrappedValue.code = String(CardRules.digitsOnly(newValue).prefix(4))
-                            }
-                    }
-                }
-
-                Toggle("This security code is a PIN", isOn: row.codeIsPIN)
-                    .font(.caption.weight(.medium))
-                    .tint(VaultTheme.electricBlue)
-
-                if let issue {
-                    Label(issue, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(blockingIssue(for: row.wrappedValue) == nil ? VaultTheme.warning : VaultTheme.danger)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("bulk.row.\(value.sourceRow).issue")
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Edit card ending in \(digits.suffix(4))")
+                    .accessibilityIdentifier("bulk.edit.\(row.sourceRow)")
                 }
             }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(invalidNumber ? VaultTheme.warning : VaultTheme.border(for: .light), lineWidth: invalidNumber ? 1.5 : 1)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("bulk.row.\(value.sourceRow)")
+        .accessibilityIdentifier("bulk.row.\(row.sourceRow)")
     }
 
-    private func field<Content: View>(
-        title: String,
-        accessibilityID: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-            content()
-                .font(.subheadline.monospacedDigit())
-                .textFieldStyle(.roundedBorder)
-                .accessibilityIdentifier(accessibilityID)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private func reviewCount(_ title: String, color: Color) -> some View {
+        Text(title)
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
     }
 
-    private func blockingIssue(for row: BulkCardRow) -> String? {
-        guard CardRules.isValidCardNumber(row.cardNumber) else {
-            return "Enter a valid 16-digit Visa or Mastercard number."
+    private func reviewBadge(for status: BulkCardReviewStatus) -> String {
+        switch status {
+        case .ready: "Ready"
+        case .existing: "In vault"
+        case .duplicate: "Repeat"
+        case .needsReview: "Review"
         }
-        guard CardRules.validateExpiry(row.expiry) else {
-            return "Enter expiry as MM/YY."
-        }
-        let code = CardRules.digitsOnly(row.code)
-        if !code.isEmpty {
-            if row.codeIsPIN {
-                guard code.count == 4 else { return "A PIN should contain 4 digits." }
-            } else if !CardRules.validateCVV(code) {
-                return "A CVV should contain 3 or 4 digits."
-            }
-        }
-        return nil
     }
 
-    private func displayIssue(for row: BulkCardRow) -> String? {
-        blockingIssue(for: row) ?? row.issue
+    private func reviewColor(for status: BulkCardReviewStatus) -> Color {
+        switch status {
+        case .ready: VaultTheme.success
+        case .existing: VaultTheme.electricBlue
+        case .duplicate: VaultTheme.warning
+        case .needsReview: VaultTheme.danger
+        }
+    }
+
+    private func reviewStatus(for row: BulkCardRow) -> BulkCardReviewStatus {
+        reviewedRows.first { $0.row.id == row.id }?.status ?? .needsReview("Check card details")
     }
 
     private func saveCards() {
-        guard !rows.isEmpty else { return }
+        guard !rows.isEmpty, existingNumberLookupError == nil, !isLoadingExistingNumbers else { return }
         isSaving = true
         defer { isSaving = false }
-        let inputs = rows.map(\.input)
+        guard eligibleCount > 0 else { return }
         do {
-            _ = try model.addBulkCards(inputs)
-            rows.removeAll()
-            model.routePath = []
+            let result = try model.saveBulkRows(rows)
+            let removedIDs = result.savedRowIDs.union(result.duplicateRowIDs)
+            rows.removeAll { removedIDs.contains($0.id) }
+            let refreshError = refreshExistingNumbers()
+            presentSaveSummary(
+                added: result.savedRowIDs.count,
+                skipped: result.duplicateRowIDs.count,
+                refreshError: refreshError
+            )
         } catch let partial as BulkCardSaveError {
-            let savedCount = min(partial.savedIDs.count, rows.count)
-            if savedCount > 0 { rows.removeFirst(savedCount) }
-            presentError(partial.localizedDescription)
+            let removedIDs = partial.savedRowIDs.union(partial.duplicateRowIDs)
+            rows.removeAll { removedIDs.contains($0.id) }
+            let refreshError = refreshExistingNumbers()
+            presentSaveSummary(
+                added: partial.savedRowIDs.count,
+                skipped: partial.duplicateRowIDs.count,
+                detail: partial.localizedDescription,
+                refreshError: refreshError
+            )
         } catch {
             presentError(error.localizedDescription)
         }
+    }
+
+    private func loadExistingNumbers() {
+        guard !isLoadingExistingNumbers else { return }
+        didAttemptExistingNumberLookup = true
+        isLoadingExistingNumbers = true
+        defer { isLoadingExistingNumbers = false }
+        do {
+            existingNumbers = try model.bulkExistingCardNumbers()
+            existingNumberLookupError = nil
+        } catch {
+            existingNumberLookupError = error.localizedDescription
+        }
+    }
+
+    private func refreshExistingNumbers() -> String? {
+        do {
+            existingNumbers = try model.bulkExistingCardNumbers()
+            existingNumberLookupError = nil
+            return nil
+        } catch {
+            existingNumberLookupError = error.localizedDescription
+            return "Couldn’t refresh the vault check: \(error.localizedDescription)"
+        }
+    }
+
+    private func presentSaveSummary(
+        added: Int,
+        skipped: Int,
+        detail: String? = nil,
+        refreshError: String? = nil
+    ) {
+        shouldLeaveAfterSaveSummary = rows.isEmpty
+        saveSummaryTitle = rows.isEmpty ? "Bulk capture complete" : "Cards added; review remains"
+        var message = "Added \(added) cards; skipped \(skipped) existing or repeated cards."
+        if needsReviewCount > 0 {
+            message += " \(needsReviewCount) \(needsReviewCount == 1 ? "card needs" : "cards need") review."
+        }
+        if existingCount + duplicateCount > 0 {
+            message += " Existing and repeated rows remain marked as skipped."
+        }
+        if let detail { message += "\n\(detail)" }
+        if let refreshError { message += "\n\(refreshError)" }
+        saveSummaryMessage = message
+        showSaveSummary = true
+    }
+
+    private func removeRow(withID id: UUID) {
+        rows.removeAll { $0.id == id }
+        if editingRow?.id == id { editingRow = nil }
     }
 
     private func requestCamera() {
@@ -601,10 +712,127 @@ struct BulkCardCaptureView: View {
     }
 
     private func loadUITestFixtureIfNeeded() {
+        let arguments = ProcessInfo.processInfo.arguments
         guard !didLoadUITestFixture,
-              ProcessInfo.processInfo.arguments.contains("--ui-testing-bulk") else { return }
+              arguments.contains("--ui-testing-bulk") || arguments.contains("--ui-testing-bulk-mixed") else { return }
         didLoadUITestFixture = true
-        rows = BulkCardParser.parse("4111111111111111,May 26,123\n5555555555554444,August 2028,")
+        if arguments.contains("--ui-testing-bulk-mixed") {
+            rows = BulkCardParser.parse("4111111111111111,May 26,123\n5555555555554444,August 2028,\n4000000000000002,June 2028,321\n4000000000000003,July 2028,123\n4000000000000002,June 2028,321")
+        } else {
+            rows = BulkCardParser.parse("4111111111111111,May 26,123\n5555555555554444,August 2028,")
+        }
+    }
+}
+
+private struct BulkCardEditSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @Binding var row: BulkCardRow
+    let onDelete: () -> Void
+
+    private var issue: String? {
+        guard CardRules.isValidCardNumber(row.cardNumber)
+                || (row.numberConfirmed && BulkCardReview.canConfirmNumber(row.cardNumber)) else {
+            return "Check the card number before adding it."
+        }
+        guard CardRules.validateExpiry(row.expiry) else { return "Enter expiry as MM/YY." }
+        let code = CardRules.digitsOnly(row.code)
+        if !code.isEmpty {
+            if row.codeIsPIN {
+                guard code.count == 4 else { return "A PIN should contain 4 digits." }
+            } else if !CardRules.validateCVV(code) {
+                return "A CVV should contain 3 or 4 digits."
+            }
+        }
+        return nil
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Card number") {
+                    TextField("Card number", text: $row.cardNumber)
+                        .keyboardType(.numberPad)
+                        .textContentType(.creditCardNumber)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.body.monospacedDigit())
+                        .accessibilityIdentifier("bulk.row.\(row.sourceRow).number")
+                        .onChange(of: row.cardNumber) { _, newValue in
+                            let digits = CardRules.digitsOnly(newValue)
+                            let limited = String(digits.prefix(19))
+                            if limited != newValue { row.cardNumber = limited }
+                            row.numberConfirmed = false
+                        }
+
+                    if !CardRules.isValidCardNumber(row.cardNumber),
+                       BulkCardReview.canConfirmNumber(row.cardNumber) {
+                        Toggle("I checked this card number", isOn: $row.numberConfirmed)
+                            .accessibilityIdentifier("bulk.row.\(row.sourceRow).confirmNumber")
+                    }
+                }
+
+                Section("Expiry and security code") {
+                    TextField("Expiry (MM/YY)", text: $row.expiry)
+                        .keyboardType(.numberPad)
+                        .textContentType(.none)
+                        .font(.body.monospacedDigit())
+                        .accessibilityIdentifier("bulk.row.\(row.sourceRow).expiry")
+                        .onChange(of: row.expiry) { _, newValue in
+                            row.expiry = CardRules.formatExpiryInput(newValue)
+                        }
+
+                    TextField(row.codeIsPIN ? "Optional PIN" : "Optional CVV", text: $row.code)
+                        .keyboardType(.numberPad)
+                        .textContentType(.none)
+                        .font(.body.monospacedDigit())
+                        .accessibilityIdentifier("bulk.row.\(row.sourceRow).code")
+                        .onChange(of: row.code) { _, newValue in
+                            row.code = String(CardRules.digitsOnly(newValue).prefix(4))
+                        }
+
+                    Toggle("This security code is a PIN", isOn: $row.codeIsPIN)
+                        .tint(VaultTheme.electricBlue)
+                }
+
+                if let issue {
+                    Section {
+                        Label(issue, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(VaultTheme.danger)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("bulk.row.\(row.sourceRow).issue")
+                    }
+                }
+
+                Section {
+                    Button(role: .destructive) {
+                        onDelete()
+                        dismiss()
+                    } label: {
+                        Label("Delete card", systemImage: "trash")
+                    }
+                    .accessibilityIdentifier("bulk.remove.\(row.sourceRow)")
+                }
+            }
+            .navigationTitle("Edit card")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .overlay {
+            if scenePhase != .active {
+                Color(uiColor: .systemBackground)
+                    .overlay { Label("VaultCard is locked", systemImage: "lock.fill").font(.headline) }
+                    .ignoresSafeArea()
+                    .accessibilityIdentifier("bulk.editor.privacyShield")
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }
 

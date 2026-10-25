@@ -3,9 +3,59 @@ import SwiftUI
 struct BulkCardSaveError: LocalizedError {
     let savedIDs: [String]
     let underlying: Error
+    var savedRowIDs: Set<UUID> = []
+    var duplicateRowIDs: Set<UUID> = []
     var errorDescription: String? {
         if savedIDs.isEmpty { return underlying.localizedDescription }
         return "Saved \(savedIDs.count) card(s). The remaining cards could not be saved: \(underlying.localizedDescription) You can retry the remaining rows."
+    }
+}
+
+struct BulkCardSaveResult {
+    var savedRowIDs: Set<UUID> = []
+    var savedCardIDs: [String] = []
+    var duplicateRowIDs: Set<UUID> = []
+    var pendingRowIDs: Set<UUID> = []
+}
+
+enum BulkCardReviewStatus: Equatable {
+    case ready
+    case existing
+    case duplicate
+    case needsReview(String)
+
+    var canSave: Bool { self == .ready }
+    var message: String? {
+        switch self {
+        case .ready: nil
+        case .existing: "Already in vault"
+        case .duplicate: "Repeated in this import"
+        case .needsReview(let reason): reason
+        }
+    }
+}
+
+enum BulkCardReview {
+    static func canConfirmNumber(_ number: String) -> Bool {
+        let digits = CardRules.digitsOnly(number)
+        return (12...19).contains(digits.count) && digits.allSatisfy { $0.isASCII && $0.isNumber }
+    }
+
+    static func status(for row: BulkCardRow, existingNumbers: Set<String>, precedingNumbers: Set<String>) -> BulkCardReviewStatus {
+        let number = CardRules.digitsOnly(row.cardNumber)
+        if !number.isEmpty, existingNumbers.contains(number) { return .existing }
+        if !number.isEmpty, precedingNumbers.contains(number) { return .duplicate }
+        if !CardRules.isValidCardNumber(number) && !(row.numberConfirmed && canConfirmNumber(number)) {
+            return .needsReview("Check card number")
+        }
+        guard CardRules.validateExpiry(row.expiry) else { return .needsReview("Check expiry") }
+        let code = CardRules.digitsOnly(row.code)
+        if !code.isEmpty {
+            if row.codeIsPIN {
+                guard code.count == 4 else { return .needsReview("Check PIN") }
+            } else if !CardRules.validateCVV(code) { return .needsReview("Check CVV") }
+        }
+        return .ready
     }
 }
 
