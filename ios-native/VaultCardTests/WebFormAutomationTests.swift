@@ -54,6 +54,55 @@ final class WebFormAutomationTests: XCTestCase {
         XCTAssertEqual(result, ["01/01/2026", "10/24/2026", "1"])
     }
 
+    func testCardSubmissionWaitsForIssuerInitializationAndForwardsCallback() async throws {
+        let web = try await fixture(cardForm() + """
+        <script>
+        window.RMSWidget = class {
+            constructor(options) { window.fixtureInitialize = options.onInitialization; }
+            initialize() { return 'original-result'; }
+        };
+        const widget = new window.RMSWidget({ onInitialization: function(response) {
+            document.body.dataset.callbackCount = String(+(document.body.dataset.callbackCount || 0) + 1);
+            document.body.dataset.callbackThis = this.marker;
+            return 'callback-result';
+        }});
+        document.body.dataset.initializeResult = widget.initialize();
+        </script>
+        """)
+        try await web.evaluateJavaScript(GiftCardMallBridge.autofillScript(credentials: credentials))
+        try await Task.sleep(for: .milliseconds(450))
+        let beforeReady = try await web.evaluateJavaScript("document.body.dataset.submissions || '0'") as? String
+        XCTAssertEqual(beforeReady, "0")
+        let callbackResult = try await web.evaluateJavaScript("fixtureInitialize.call({marker:'preserved'}, {status:201,rmsId:'fixture-session'});") as? String
+        XCTAssertEqual(callbackResult, "callback-result")
+        try await waitFor(web, "document.body.dataset.submissions === '1'")
+        let forwarded = try await web.evaluateJavaScript("[document.body.dataset.callbackCount,document.body.dataset.callbackThis,document.body.dataset.initializeResult]") as? [String]
+        XCTAssertEqual(forwarded, ["1", "preserved", "original-result"])
+    }
+
+    func testIssuerInitializationFailureDoesNotSubmitCard() async throws {
+        let web = try await fixture(cardForm() + """
+        <script>
+        window.RMSWidget = class { constructor(options) { window.fixtureInitialize = options.onInitialization; } };
+        new window.RMSWidget({onInitialization: function() {}});
+        </script>
+        """)
+        try await web.evaluateJavaScript(GiftCardMallBridge.autofillScript(credentials: credentials))
+        try await web.evaluateJavaScript("fixtureInitialize({status:500,rmsId:''}); undefined;")
+        try await Task.sleep(for: .milliseconds(450))
+        let submissions = try await web.evaluateJavaScript("document.body.dataset.submissions || '0'") as? String
+        XCTAssertEqual(submissions, "0")
+    }
+
+    func testIssuerVerificationResponsesAreRenderedOnlyOnTrustedRoutes() {
+        let visa = GiftCardMallBridge.balanceURL(for: .visa)
+        XCTAssertTrue(GiftCardMallBridge.canDisplayBalanceResponse(url: visa, statusCode: 403, mimeType: "text/html"))
+        XCTAssertTrue(GiftCardMallBridge.canDisplayBalanceResponse(url: visa, statusCode: 429, mimeType: "text/html"))
+        XCTAssertFalse(GiftCardMallBridge.canDisplayBalanceResponse(url: visa, statusCode: 403, mimeType: "application/json"))
+        XCTAssertFalse(GiftCardMallBridge.canDisplayBalanceResponse(url: visa, statusCode: 500, mimeType: "text/html"))
+        XCTAssertFalse(GiftCardMallBridge.canDisplayBalanceResponse(url: URL(string: "https://example.com/"), statusCode: 403, mimeType: "text/html"))
+    }
+
     private var transactionForm: String {
         """
         <app-date-form><form class="date-form">
@@ -79,7 +128,11 @@ final class WebFormAutomationTests: XCTestCase {
     }
 
     private func fixture(_ body: String) async throws -> WKWebView {
-        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 800))
+        let config = WKWebViewConfiguration()
+        config.userContentController.addUserScript(WKUserScript(
+            source: GiftCardMallBridge.cardSubmissionReadinessScript(), injectionTime: .atDocumentStart, forMainFrameOnly: true
+        ))
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 800), configuration: config)
         webViews.append(web)
         let window = try XCTUnwrap(UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
