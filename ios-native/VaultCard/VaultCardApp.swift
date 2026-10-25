@@ -2430,7 +2430,7 @@ struct RootView: View {
         .tint(VaultTheme.electricBlue)
         .task { await model.start() }
         .alert(
-            model.zeroBalancePrompt.map { $0.kind == .autoArchived ? "Card archived" : "No balance left" } ?? "VaultCard",
+            model.zeroBalancePrompt.map { $0.kind == .autoArchived ? "Automatically archived" : "No balance left" } ?? "VaultCard",
             isPresented: Binding(
                 get: { model.alertMessage != nil || model.zeroBalancePrompt != nil },
                 set: { isPresented in
@@ -2444,8 +2444,8 @@ struct RootView: View {
         ) {
             if let prompt = model.zeroBalancePrompt {
                 if prompt.kind == .autoArchived {
-                    Button("Done", role: .cancel) { model.resolveZeroBalancePrompt(.done) }
-                    Button("Keep This Card") { model.resolveZeroBalancePrompt(.keepThisCard) }
+                    Button("Leave Archived", role: .cancel) { model.resolveZeroBalancePrompt(.done) }
+                    Button("Restore to Vault") { model.resolveZeroBalancePrompt(.keepThisCard) }
                 } else {
                     Button("Not Now", role: .cancel) { model.resolveZeroBalancePrompt(.notNow) }
                     Button("Archive This Card") { model.resolveZeroBalancePrompt(.archiveThisCard) }
@@ -2457,7 +2457,7 @@ struct RootView: View {
         } message: {
             if let prompt = model.zeroBalancePrompt {
                 Text(prompt.kind == .autoArchived
-                     ? "\(prompt.cardName) (•••• \(prompt.last4)) has a $0.00 balance and was automatically archived. Its details and history are kept."
+                     ? "\(prompt.cardName) (•••• \(prompt.last4)) has a $0.00 balance and was moved to Archived Cards because automatic archiving is on. Its details and history are saved.\n\nRestoring it brings it back to your Vault for now. Future $0 balance checks will still archive it automatically."
                      : "\(prompt.cardName) (•••• \(prompt.last4)) has a $0.00 balance. Archive this card, or turn on automatic archiving for future $0 balances.")
             } else {
                 Text(model.alertMessage ?? "")
