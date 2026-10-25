@@ -404,25 +404,30 @@ final class VaultCardUITests: XCTestCase {
         XCTAssertTrue(retry.isHittable)
     }
 
-    func testZeroBalanceRefreshAutoArchivesAndOffersUndo() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-zero-refresh"]
-        app.launch()
-        openSeededCardForBalance(app)
-        app.buttons["detail.refresh"].tap()
-        let popup = app.alerts["Card archived"]
-        XCTAssertTrue(popup.waitForExistence(timeout: 5))
-        XCTAssertTrue(popup.buttons["Done"].exists)
-        XCTAssertTrue(popup.buttons["Keep This Card"].exists)
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Zero balance automatic archive with undo"
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
-        popup.buttons["Keep This Card"].tap()
-        XCTAssertFalse(popup.exists)
-        XCTAssertTrue(app.navigationBars["Check Balance"].exists)
-        app.navigationBars["Check Balance"].buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.buttons["detail.archive"].waitForExistence(timeout: 5))
+    func testAutoArchiveNoticeExplainsBothOutcomesWithoutChangingPreference() throws {
+        for restoreToVault in [false, true] {
+            let app = XCUIApplication()
+            app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-zero-refresh"]
+            app.launch()
+            openSeededCardForBalance(app)
+            app.buttons["detail.refresh"].tap()
+            let popup = app.alerts["Automatically archived"]
+            XCTAssertTrue(popup.waitForExistence(timeout: 5))
+            XCTAssertTrue(popup.buttons["Leave Archived"].exists)
+            XCTAssertTrue(popup.buttons["Restore to Vault"].exists)
+            XCTAssertTrue(popup.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "because automatic archiving is on")).firstMatch.exists)
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = "Automatic archive with explicit outcomes"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+            popup.buttons[restoreToVault ? "Restore to Vault" : "Leave Archived"].tap()
+            XCTAssertFalse(popup.exists)
+            app.navigationBars["Check Balance"].buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(app.buttons[restoreToVault ? "detail.archive" : "detail.restore"].waitForExistence(timeout: 5))
+            app.buttons["tray.settings"].tap()
+            XCTAssertEqual(app.switches["Archive $0 cards automatically"].value as? String, "1")
+            app.terminate()
+        }
     }
 
     func testDisabledAutoArchiveOffersOneTimeAndAlwaysChoices() throws {
