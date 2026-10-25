@@ -16,54 +16,26 @@ final class VaultFundsSummaryTests: XCTestCase {
         XCTAssertEqual(summary.totalText, "$1.30")
     }
 
-    func testUnknownBalanceIsNotCountedAsZero() {
-        let summary = VaultFundsSummary(cards: [
-            card("zero", balance: 0, fetchedAt: now),
-            card("unknown", balance: nil, fetchedAt: nil)
-        ], now: now)
-
-        XCTAssertEqual(summary.total, .zero)
-        XCTAssertEqual(summary.unknownBalanceCount, 1)
-        XCTAssertEqual(summary.totalLabel, "Known unused funds")
-        XCTAssertEqual(summary.coverageText, "1 card needs a balance check")
-
-        let allUnknown = VaultFundsSummary(cards: [card("unknown", balance: nil, fetchedAt: nil)], now: now)
-        XCTAssertNil(allUnknown.total)
-        XCTAssertEqual(allUnknown.totalText, "Not checked yet")
-    }
-
-    func testArchivedCardIsExcludedFromSummary() {
-        let summary = VaultFundsSummary(cards: [
-            card("active", balance: 12.34, fetchedAt: now),
-            card("archived", balance: 999, fetchedAt: now, archived: true)
-        ], now: now)
-
-        XCTAssertEqual(summary.total, Decimal(string: "12.34"))
-        XCTAssertEqual(summary.activeCardCount, 1)
-    }
-
-    func testStaleKnownBalancesAreIncludedAndReportedSeparately() {
+    func testSummarySeparatesArchivedStaleAndUnknownBalances() {
         let staleDate = now.addingTimeInterval(-VaultCard.balanceFreshnessInterval - 1)
         let summary = VaultFundsSummary(cards: [
             card("fresh", balance: 8.25, fetchedAt: now),
             card("stale", balance: 3.50, fetchedAt: staleDate),
-            card("unknown", balance: nil, fetchedAt: nil)
+            card("zero", balance: 0, fetchedAt: now),
+            card("unknown", balance: nil, fetchedAt: nil),
+            card("archived", balance: 999, fetchedAt: now, archived: true)
         ], now: now)
 
         XCTAssertEqual(summary.total, Decimal(string: "11.75"))
+        XCTAssertEqual(summary.activeCardCount, 4)
         XCTAssertEqual(summary.unknownBalanceCount, 1)
         XCTAssertEqual(summary.staleBalanceCount, 1)
+        XCTAssertEqual(summary.totalLabel, "Known unused funds")
         XCTAssertEqual(summary.coverageText, "1 card needs a balance check · 1 balance needs refresh")
-    }
 
-    func testSummaryUsesAllSuppliedActiveCardsWithoutSearchFiltering() {
-        let summary = VaultFundsSummary(cards: [
-            card("visible", balance: 4, fetchedAt: now),
-            card("would-be-filtered", balance: 7, fetchedAt: now)
-        ], now: now)
-
-        XCTAssertEqual(summary.total, Decimal(string: "11"))
-        XCTAssertEqual(summary.activeCardCount, 2)
+        let allUnknown = VaultFundsSummary(cards: [card("unknown", balance: nil, fetchedAt: nil)], now: now)
+        XCTAssertNil(allUnknown.total)
+        XCTAssertEqual(allUnknown.totalText, "Not checked yet")
     }
 
     private func card(

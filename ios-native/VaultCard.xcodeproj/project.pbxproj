@@ -31,6 +31,7 @@
 		111111111111111111111127 /* CardNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111027 /* CardNotificationService.swift */; };
 		111111111111111111111128 /* CardUseReminderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111028 /* CardUseReminderView.swift */; };
 		111111111111111111111129 /* CardNotificationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111029 /* CardNotificationServiceTests.swift */; };
+		111111111111111111111130 /* DuplicateCardCleanupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111030 /* DuplicateCardCleanupTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -79,6 +80,7 @@
 		111111111111111111111027 /* CardNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardNotificationService.swift; sourceTree = "<group>"; };
 		111111111111111111111028 /* CardUseReminderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardUseReminderView.swift; sourceTree = "<group>"; };
 		111111111111111111111029 /* CardNotificationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardNotificationServiceTests.swift; sourceTree = "<group>"; };
+		111111111111111111111030 /* DuplicateCardCleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicateCardCleanupTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -144,6 +146,7 @@
 			children = (
 				111111111111111111111003 /* VaultCardTests.swift */,
 				111111111111111111111029 /* CardNotificationServiceTests.swift */,
+				111111111111111111111030 /* DuplicateCardCleanupTests.swift */,
 				111111111111111111111026 /* CardRowTimestampTests.swift */,
 				111111111111111111111024 /* ZeroBalanceArchiveTests.swift */,
 				111111111111111111111021 /* WebFormAutomationTests.swift */,
@@ -324,6 +327,7 @@
 			files = (
 				111111111111111111111103 /* VaultCardTests.swift in Sources */,
 				111111111111111111111129 /* CardNotificationServiceTests.swift in Sources */,
+				111111111111111111111130 /* DuplicateCardCleanupTests.swift in Sources */,
 				111111111111111111111126 /* CardRowTimestampTests.swift in Sources */,
 				111111111111111111111124 /* ZeroBalanceArchiveTests.swift in Sources */,
 				111111111111111111111121 /* WebFormAutomationTests.swift in Sources */,

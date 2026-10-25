@@ -184,6 +184,7 @@ struct AppSettings: Codable, Equatable {
     var addCardPreference = AddCardPreference.scan
     var hasSeenSwipeArchiveConfirmation = false
     var archiveZeroBalanceCardsAutomatically = true
+    var hasCleanedUncheckedDuplicates = false
 
     private enum CodingKeys: String, CodingKey {
         case onboardingCompleted
@@ -193,6 +194,7 @@ struct AppSettings: Codable, Equatable {
         case addCardPreference
         case hasSeenSwipeArchiveConfirmation
         case archiveZeroBalanceCardsAutomatically
+        case hasCleanedUncheckedDuplicates
     }
 
     init() {}
@@ -206,6 +208,7 @@ struct AppSettings: Codable, Equatable {
         addCardPreference = try values.decodeIfPresent(AddCardPreference.self, forKey: .addCardPreference) ?? .scan
         hasSeenSwipeArchiveConfirmation = try values.decodeIfPresent(Bool.self, forKey: .hasSeenSwipeArchiveConfirmation) ?? false
         archiveZeroBalanceCardsAutomatically = try values.decodeIfPresent(Bool.self, forKey: .archiveZeroBalanceCardsAutomatically) ?? true
+        hasCleanedUncheckedDuplicates = try values.decodeIfPresent(Bool.self, forKey: .hasCleanedUncheckedDuplicates) ?? false
     }
 }
 
@@ -1942,30 +1945,6 @@ final class AppModel {
         return id
     }
 
-    func addBulkCards(_ inputs: [CardInput]) throws -> [String] {
-        // Validate the entire review before writing any card.
-        for input in inputs {
-            guard CardRules.isValidCardNumber(input.cardNumber), CardRules.validateExpiry(input.expiry),
-                  input.cvv.isEmpty || CardRules.validateCVV(input.cvv),
-                  input.pin.isEmpty || (input.pin.count == 4 && input.pin.allSatisfy(\.isNumber)) else {
-                throw VaultError.validation("Review the card number, expiration, and CVV / PIN for every row.")
-            }
-        }
-        var savedIDs: [String] = []
-        do {
-            var existing = try bulkExistingCardNumbers()
-            for input in inputs {
-                let number = CardRules.digitsOnly(input.cardNumber)
-                guard existing.insert(number).inserted else { continue }
-                savedIDs.append(try addCard(input, allowMissingCVV: true))
-            }
-            return savedIDs
-        } catch {
-            reloadCards()
-            throw BulkCardSaveError(savedIDs: savedIDs, underlying: error)
-        }
-    }
-
     // Compare secure full numbers, never suffixes, CVV, or expiry. Archived cards count too.
     func bulkExistingCardNumbers() throws -> Set<String> {
         try Set(environment.cardRepository.getCards().map {
@@ -1995,6 +1974,59 @@ final class AppModel {
             reloadCards()
             throw BulkCardSaveError(savedIDs: result.savedCardIDs, underlying: error,
                 savedRowIDs: result.savedRowIDs, duplicateRowIDs: result.duplicateRowIDs)
+        }
+    }
+
+    /// Remove only unchecked copies of an already checked card. Never merge or
+    /// delete cards that have their own balances/history, or match only by suffix.
+    @discardableResult
+    func removeUncheckedDuplicateCards() throws -> Int {
+        let snapshot = try environment.cardRepository.getCards()
+        var credentials = try Dictionary(uniqueKeysWithValues: snapshot.map { card in
+            (card.id, try environment.cardRepository.getCredentials(cardID: card.id))
+        })
+        let checkedCards = snapshot.filter {
+            $0.lastFetchedAt != nil || $0.balance != nil || !$0.transactions.isEmpty
+        }.sorted { $0.addedAt < $1.addedAt }
+        var duplicateIDs = Set<String>()
+        for copy in snapshot.sorted(by: { $0.addedAt < $1.addedAt }) where copy.lastFetchedAt == nil && copy.balance == nil && copy.transactions.isEmpty {
+            guard let copyCredentials = credentials[copy.id] else { continue }
+            let number = CardRules.digitsOnly(copyCredentials.cardNumber)
+            guard !number.isEmpty else { continue }
+            guard let original = checkedCards.first(where: { card in
+                guard card.expiry == copy.expiry, let saved = credentials[card.id] else { return false }
+                return CardRules.digitsOnly(saved.cardNumber) == number
+                    && (saved.cvv.isEmpty || copyCredentials.cvv.isEmpty || saved.cvv == copyCredentials.cvv)
+                    && (saved.pin.isEmpty || copyCredentials.pin.isEmpty || saved.pin == copyCredentials.pin)
+            }), var saved = credentials[original.id] else { continue }
+            let previous = saved
+            if saved.cvv.isEmpty { saved.cvv = copyCredentials.cvv }
+            if saved.pin.isEmpty { saved.pin = copyCredentials.pin }
+            if saved != previous {
+                try environment.cardRepository.updateCredentials(cardID: original.id, credentials: saved)
+                credentials[original.id] = saved
+            }
+            duplicateIDs.insert(copy.id)
+        }
+        if !duplicateIDs.isEmpty {
+            try environment.cardRepository.deleteCards(ids: duplicateIDs)
+            reloadCards()
+        }
+        return duplicateIDs.count
+    }
+
+    private func cleanUncheckedDuplicatesIfNeeded() {
+        guard !isLocked, !settings.hasCleanedUncheckedDuplicates else { return }
+        do {
+            let count = try removeUncheckedDuplicateCards()
+            settings.hasCleanedUncheckedDuplicates = true
+            saveSettings()
+            if count > 0 {
+                alertMessage = "Removed \(count) unchecked duplicate cards. Original cards, balances, and transaction history were kept."
+            }
+        } catch {
+            // Leave the migration pending; inaccessible credentials must never be guessed.
+            alertMessage = "Duplicate cleanup couldn’t finish: \(error.localizedDescription)"
         }
     }
 
@@ -2241,6 +2273,7 @@ final class AppModel {
     func unlockIfNeeded() async {
         guard settings.appLockEnabled else {
             isLocked = false
+            cleanUncheckedDuplicatesIfNeeded()
             return
         }
         guard !isAuthenticating else { return }
@@ -2249,6 +2282,7 @@ final class AppModel {
         let authenticated = await environment.biometricService.authenticate(reason: "Unlock your card vault")
         isAuthenticating = false
         isLocked = !authenticated
+        if authenticated { cleanUncheckedDuplicatesIfNeeded() }
     }
 
     private func saveSettings() {

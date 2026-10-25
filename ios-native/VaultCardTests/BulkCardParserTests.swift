@@ -75,14 +75,19 @@ final class BulkCardParserTests: XCTestCase {
         }
     }
 
-    func testQuotedCSVAndOmittedCode() {
-        let rows = BulkCardParser.parse(#""4111 1111 1111 1111","May","'26","012""#)
-        XCTAssertEqual(rows.first?.expiry, "05/26")
-        XCTAssertEqual(rows.first?.code, "012")
-        XCTAssertNil(rows.first?.issue)
-        let missing = BulkCardParser.parse("4111111111111111,May,2026,")
-        XCTAssertEqual(missing.first?.code, "")
-        XCTAssertNil(missing.first?.issue)
+    func testDelimitedExpiryCellsHandleQuotedMonthsAndMissingCode() {
+        let cases: [(input: String, expiry: String, code: String)] = [
+            (#""4111 1111 1111 1111","May","'26","012""#, "05/26", "012"),
+            ("4111111111111111,May,2026,", "05/26", ""),
+            ("4111111111111111|8 2026|123", "08/26", "123")
+        ]
+
+        for testCase in cases {
+            let row = BulkCardParser.parse(testCase.input).first
+            XCTAssertEqual(row?.expiry, testCase.expiry, testCase.input)
+            XCTAssertEqual(row?.code, testCase.code, testCase.input)
+            XCTAssertNil(row?.issue, testCase.input)
+        }
     }
 
     func testParsesDelimitedCombinedAndSplitExpiryColumns() {
@@ -117,27 +122,104 @@ final class BulkCardParserTests: XCTestCase {
         XCTAssertEqual(rows[1].code, "987")
     }
 
-    func testParsesWhitespaceSeparatedMonthAndYearInsideDelimitedExpiryCell() {
-        let rows = BulkCardParser.parse("4111111111111111|8 2026|123")
-
-        XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0].expiry, "08/26")
-        XCTAssertEqual(rows[0].code, "123")
-    }
-
-    func testParsesWhitespaceOCRRowsAndOptionalCode() {
+    func testWhitespaceRowsKeepTheirOwnExpiryAndOptionalCode() {
         let rows = BulkCardParser.parse("""
         4111 1111 1111 1111 Sep 2028 123
         5555 5555 5555 4444 01/29
+        4000000000000002 09/29
+        5555555555554444 10/30 987
         """)
 
-        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.count, 4)
+        XCTAssertEqual(rows.map(\.cardNumber), [
+            "4111111111111111", "5555555555554444", "4000000000000002", "5555555555554444"
+        ])
         XCTAssertEqual(rows[0].expiry, "09/28")
         XCTAssertEqual(rows[0].code, "123")
-        XCTAssertNil(rows[0].issue)
         XCTAssertEqual(rows[1].expiry, "01/29")
         XCTAssertEqual(rows[1].code, "")
-        XCTAssertNil(rows[1].issue)
+        XCTAssertEqual(rows[2].expiry, "09/29")
+        XCTAssertEqual(rows[2].code, "")
+        XCTAssertEqual(rows[3].expiry, "10/30")
+        XCTAssertEqual(rows[3].code, "987")
+        for row in rows {
+            XCTAssertNil(row.issue)
+        }
+    }
+
+    func testHeadersMapExpiryAndCodeWithoutUsingLabelsOrTrailingColumns() {
+        let cases: [(
+            name: String,
+            input: String,
+            expectedRows: [(cardNumber: String, expiry: String, code: String, codeIsPIN: Bool)]
+        )] = [
+            (
+                "row labels and trailing columns",
+                """
+                Row,Card,Month,Date (year),CVV,Balance,Last updated
+                1,4111111111111111,09,35,021,48.25,10/24/2026
+                2,5555555555554444,11,36,,19.00,10/24/2026
+                """,
+                [
+                    ("4111111111111111", "09/35", "021", false),
+                    ("5555555555554444", "11/36", "", false)
+                ]
+            ),
+            (
+                "separate expiry month and year columns",
+                """
+                Card,Expiry Month,Expiry Year,CVV,Balance
+                4111111111111111,06,2035,021,123.00
+                """,
+                [("4111111111111111", "06/35", "021", false)]
+            ),
+            (
+                "no security-code header",
+                """
+                Card,Month,Date (year),Balance,Last updated
+                4111111111111111,9,2035,123,10/24/2026
+                """,
+                [("4111111111111111", "09/35", "", false)]
+            ),
+            (
+                "PIN header",
+                """
+                Card Number,Expiry,PIN
+                4111111111111111,12/28,1234
+                """,
+                [("4111111111111111", "12/28", "1234", true)]
+            )
+        ]
+
+        for testCase in cases {
+            let rows = BulkCardParser.parse(testCase.input)
+            XCTAssertEqual(rows.count, testCase.expectedRows.count, testCase.name)
+            for (row, expected) in zip(rows, testCase.expectedRows) {
+                XCTAssertEqual(row.cardNumber, expected.cardNumber, testCase.name)
+                XCTAssertEqual(row.expiry, expected.expiry, testCase.name)
+                XCTAssertEqual(row.code, expected.code, testCase.name)
+                XCTAssertEqual(row.codeIsPIN, expected.codeIsPIN, testCase.name)
+                XCTAssertNil(row.issue, testCase.name)
+                if expected.codeIsPIN {
+                    XCTAssertEqual(row.input.pin, expected.code, testCase.name)
+                    XCTAssertEqual(row.input.cvv, "", testCase.name)
+                }
+            }
+        }
+    }
+
+    func testHeaderlessRowsChooseOnlyTheCVVCandidate() {
+        let cases: [(input: String, expiry: String, code: String)] = [
+            ("4111111111111111 09/35 021 48.25 10/24/2026", "09/35", "021"),
+            ("4111111111111111,06,35,,123,Jun08", "06/35", "")
+        ]
+
+        for testCase in cases {
+            let row = BulkCardParser.parse(testCase.input).first
+            XCTAssertEqual(row?.cardNumber, "4111111111111111", testCase.input)
+            XCTAssertEqual(row?.expiry, testCase.expiry, testCase.input)
+            XCTAssertEqual(row?.code, testCase.code, testCase.input)
+        }
     }
 
     func testKeepsMalformedCandidateRowsForReview() {
@@ -148,84 +230,6 @@ final class BulkCardParserTests: XCTestCase {
         XCTAssertEqual(rows[0].expiry, "13/29")
         XCTAssertEqual(rows[0].code, "12")
         XCTAssertNotNil(rows[0].issue)
-    }
-
-    func testPINHeaderMarksCodeAsPINAndInputMapsItToPIN() {
-        let rows = BulkCardParser.parse("""
-        Card Number,Expiry,PIN
-        4111111111111111,12/28,1234
-        """)
-
-        XCTAssertEqual(rows.count, 1)
-        XCTAssertTrue(rows[0].codeIsPIN)
-        XCTAssertEqual(rows[0].input.pin, "1234")
-        XCTAssertEqual(rows[0].input.cvv, "")
-        XCTAssertNil(rows[0].issue)
-    }
-
-    func testRowsDoNotShareColumnsAcrossLineBoundaries() {
-        let rows = BulkCardParser.parse("""
-        4111111111111111 09/29
-        5555555555554444 10/30 987
-        """)
-
-        XCTAssertEqual(rows.count, 2)
-        XCTAssertEqual(rows[0].expiry, "09/29")
-        XCTAssertEqual(rows[0].code, "")
-        XCTAssertEqual(rows[1].expiry, "10/30")
-        XCTAssertEqual(rows[1].code, "987")
-    }
-
-    func testHeaderMappingIgnoresRowLabelsAndTrailingColumns() {
-        let rows = BulkCardParser.parse("""
-        Row,Card,Month,Date (year),CVV,Balance,Last updated
-        1,4111111111111111,09,35,021,48.25,10/24/2026
-        2,5555555555554444,11,36,,19.00,10/24/2026
-        """)
-
-        XCTAssertEqual(rows.count, 2)
-        XCTAssertEqual(rows[0].cardNumber, "4111111111111111")
-        XCTAssertEqual(rows[0].expiry, "09/35")
-        XCTAssertEqual(rows[0].code, "021")
-        XCTAssertEqual(rows[1].cardNumber, "5555555555554444")
-        XCTAssertEqual(rows[1].expiry, "11/36")
-        XCTAssertEqual(rows[1].code, "")
-    }
-
-    func testHeaderWithoutSecurityCodeLeavesCodeEmpty() {
-        let rows = BulkCardParser.parse("""
-        Card,Month,Date (year),Balance,Last updated
-        4111111111111111,9,2035,123,10/24/2026
-        """)
-
-        XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0].expiry, "09/35")
-        XCTAssertEqual(rows[0].code, "")
-    }
-
-    func testExpiryMonthAndYearHeadersMapByComponent() {
-        let row = BulkCardParser.parse("""
-        Card,Expiry Month,Expiry Year,CVV,Balance
-        4111111111111111,06,2035,021,123.00
-        """).first
-
-        XCTAssertEqual(row?.expiry, "06/35")
-        XCTAssertEqual(row?.code, "021")
-    }
-
-    func testHeaderlessRowsUseFirstCVVCandidateBeforeTrailingData() {
-        let row = BulkCardParser.parse("4111111111111111 09/35 021 48.25 10/24/2026").first
-
-        XCTAssertEqual(row?.cardNumber, "4111111111111111")
-        XCTAssertEqual(row?.expiry, "09/35")
-        XCTAssertEqual(row?.code, "021")
-    }
-
-    func testEmptyCodeCellDoesNotUseLaterNumericColumns() {
-        let row = BulkCardParser.parse("4111111111111111,06,35,,123,Jun08").first
-
-        XCTAssertEqual(row?.expiry, "06/35")
-        XCTAssertEqual(row?.code, "")
     }
 
     func testPANCandidateTrimsTrailingOCRPunctuationOnly() {

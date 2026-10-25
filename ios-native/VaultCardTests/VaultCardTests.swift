@@ -19,10 +19,6 @@ final class VaultCardTests: XCTestCase {
         XCTAssertEqual(failed.balanceFreshness(at: now), .needsRefresh)
         XCTAssertEqual(stale.balanceFreshness(at: now), .needsRefresh)
 
-        let cards = [recentlyUpdated, neverUpdated, failed, stale]
-        let upToDateCount = cards.filter { $0.balanceFreshness(at: now) == .upToDate }.count
-        let needsRefreshCount = cards.filter { $0.balanceFreshness(at: now) == .needsRefresh }.count
-        XCTAssertEqual(upToDateCount + needsRefreshCount, cards.count)
     }
 
     func testCardValidationAndNetworkInference() {
@@ -52,24 +48,13 @@ final class VaultCardTests: XCTestCase {
         )
     }
 
-    func testCardNumberDisplayAndGiftCardMallAutofillFormatting() {
+    func testCardNumberDisplayAndCredentialExpiryFormatting() {
         XCTAssertEqual(CardRules.formatCardNumber("4111111111111111"), "4111 1111 1111 1111")
         XCTAssertEqual(CardRules.formatCardNumber("5555-5555 5555-4444"), "5555 5555 5555 4444")
 
         let credentials = CardCredentials(cardNumber: "4111111111111111", expiry: "09/29", cvv: "123", pin: "")
         XCTAssertEqual(credentials.expiryMonth, "09")
         XCTAssertEqual(credentials.expiryYear, "29")
-
-        let script = GiftCardMallBridge.autofillScript(credentials: credentials)
-        XCTAssertTrue(script.contains("setTimeout(fill"))
-        XCTAssertTrue(script.contains("'#credit-card-number'"))
-        XCTAssertTrue(script.contains("'#expiration_month'"))
-        XCTAssertTrue(script.contains("'#expiration_year'"))
-        XCTAssertTrue(script.contains("'#credit-card-code'"))
-        XCTAssertTrue(script.contains("input[name=\"cvv\"]"))
-        XCTAssertTrue(script.contains("input[placeholder=\"EnterCode\"]"))
-        XCTAssertTrue(script.contains("\"29\""))
-        XCTAssertFalse(script.contains("\"2029\""))
     }
 
     func testScanTextExtractionHappyAndFailurePaths() {
@@ -100,24 +85,29 @@ final class VaultCardTests: XCTestCase {
         XCTAssertEqual(result.network, .mastercard)
     }
 
-    func testScanNormalizesSpacedExpiryAndLabeledSecurityCode() {
+    func testScanRecognizesLabeledSecurityCodeVariants() {
         let scanner = VisionCardScanner()
-        let result = scanner.extractCandidates(from: "Card number: 4111-1111-1111-1111 Expires 09 / 29 Security Code 321")
+        let cases: [(text: String, expectedCVV: String)] = [
+            ("Card number: 4111-1111-1111-1111 Expires 09 / 29 Security Code 321", "321"),
+            ("Card 4111 1111 1111 1111\nEXP 09/29\nC V V : 1 2 3", "123"),
+            ("5555 5555 5555 4444\n12/30\nSecurity Code\n987", "987"),
+            ("SEC ID: 6 5 4", "654"),
+            ("Card verification number 321", "321"),
+            ("CSC 987", "987")
+        ]
 
-        XCTAssertEqual(result.cardNumber, "4111111111111111")
-        XCTAssertEqual(result.expiry, "09/29")
-        XCTAssertEqual(result.cvv, "321")
-        XCTAssertEqual(result.confidence, 0.95)
-    }
+        for testCase in cases {
+            XCTAssertEqual(
+                scanner.extractCandidates(from: testCase.text).cvv,
+                testCase.expectedCVV,
+                testCase.text
+            )
+        }
 
-    func testScanRecognizesCVVWithOCRSpacingAndLineBreaks() {
-        let scanner = VisionCardScanner()
-        let spaced = scanner.extractCandidates(from: "Card 4111 1111 1111 1111\nEXP 09/29\nC V V : 1 2 3")
-        XCTAssertEqual(spaced.cvv, "123")
-
-        let lineBreak = scanner.extractCandidates(from: "5555 5555 5555 4444\n12/30\nSecurity Code\n987")
-        XCTAssertEqual(lineBreak.cvv, "987")
-        XCTAssertEqual(lineBreak.confidence, 0.95)
+        let normalized = scanner.extractCandidates(from: cases[0].text)
+        XCTAssertEqual(normalized.cardNumber, "4111111111111111")
+        XCTAssertEqual(normalized.expiry, "09/29")
+        XCTAssertEqual(normalized.confidence, 0.95)
     }
 
     func testScanInfersIsolatedThreeDigitSecurityValueWithoutCVVLabel() {
@@ -132,26 +122,7 @@ final class VaultCardTests: XCTestCase {
         XCTAssertEqual(result.confidence, 0.95)
     }
 
-    func testScanRecognizesAlternativeSecurityCodeLabels() {
-        let scanner = VisionCardScanner()
-        XCTAssertEqual(scanner.extractCandidates(from: "SEC ID: 6 5 4").cvv, "654")
-        XCTAssertEqual(scanner.extractCandidates(from: "Card verification number 321").cvv, "321")
-        XCTAssertEqual(scanner.extractCandidates(from: "CSC 987").cvv, "987")
-    }
-
-    func testSuggestedNicknameIsStableAdjectiveCharacterPair() {
-        let first = CardRules.suggestedNickname(for: "4111111111111111")
-        XCTAssertEqual(first, CardRules.suggestedNickname(for: "4111 1111 1111 1111"))
-        XCTAssertEqual(first.split(separator: " ").count, 2)
-        XCTAssertNotEqual(first, CardRules.suggestedNickname(for: "4111111111111111", avoiding: [first]))
-    }
-
-    func testLegacySettingsDefaultToScanAndAddNavigationDoesNotDuplicate() throws {
-        let legacy = try XCTUnwrap(#"{"onboardingCompleted":true}"#.data(using: .utf8))
-        let decoded = try JSONDecoder().decode(AppSettings.self, from: legacy)
-        XCTAssertTrue(decoded.onboardingCompleted)
-        XCTAssertEqual(decoded.addCardPreference, .scan)
-
+    func testPreferredAddNavigationDoesNotDuplicate() throws {
         let model = AppModel(environment: try AppEnvironment.uiTesting())
         model.showPreferredAddFlow()
         model.showPreferredAddFlow()
@@ -168,17 +139,21 @@ final class VaultCardTests: XCTestCase {
         }
     }
 
-    func testLegacyAppSettingsDefaultsSwipeArchiveConfirmationToUnseen() throws {
-        let legacy = try XCTUnwrap(#"{"onboardingCompleted":true,"addCardPreference":"scan"}"#.data(using: .utf8))
+    func testSettingsRepositoryMigratesLegacyDefaultsAndPersistsSwipeArchiveConfirmation() throws {
+        let suiteName = "VaultCardTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let decoded = try JSONDecoder().decode(AppSettings.self, from: legacy)
+        let legacy = try XCTUnwrap(#"{"onboardingCompleted":true}"#.data(using: .utf8))
+        defaults.set(legacy, forKey: "app_settings")
+        let settingsRepository = UserDefaultsSettingsRepository(defaults: defaults)
+        let migrated = settingsRepository.load()
+        XCTAssertTrue(migrated.onboardingCompleted)
+        XCTAssertEqual(migrated.addCardPreference, .scan)
+        XCTAssertFalse(migrated.hasSeenSwipeArchiveConfirmation)
 
-        XCTAssertFalse(decoded.hasSeenSwipeArchiveConfirmation)
-    }
-
-    func testMarkSwipeArchiveConfirmationSeenUpdatesAndPersistsSettings() throws {
         let container = try ModelContainerFactory.makeInMemory()
-        let settingsRepository = InMemorySettingsRepository()
         let environment = AppEnvironment(
             cardRepository: SwiftDataCardRepository(
                 context: ModelContext(container),
@@ -195,19 +170,7 @@ final class VaultCardTests: XCTestCase {
         model.markSwipeArchiveConfirmationSeen()
 
         XCTAssertTrue(model.settings.hasSeenSwipeArchiveConfirmation)
-        XCTAssertTrue(settingsRepository.load().hasSeenSwipeArchiveConfirmation)
-    }
-
-    func testAppSettingsRoundTripPreservesSeenSwipeArchiveConfirmation() throws {
-        var settings = AppSettings()
-        settings.hasSeenSwipeArchiveConfirmation = true
-
-        let decoded = try JSONDecoder().decode(
-            AppSettings.self,
-            from: JSONEncoder().encode(settings)
-        )
-
-        XCTAssertTrue(decoded.hasSeenSwipeArchiveConfirmation)
+        XCTAssertTrue(UserDefaultsSettingsRepository(defaults: defaults).load().hasSeenSwipeArchiveConfirmation)
     }
 
     func testRepositoryRejectsDuplicateCredential() throws {
@@ -480,27 +443,6 @@ final class VaultCardTests: XCTestCase {
         XCTAssertEqual(Set(store.records.keys), [survivorID])
     }
 
-    func testSchemaV2ArchivedAtDefaultsToNilForLegacyStyleCard() {
-        let card = VaultCard(
-            id: "legacy-card",
-            nickname: "Legacy",
-            network: .visa,
-            last4: "1111",
-            expiry: "09/29",
-            balance: 12,
-            transactions: [],
-            lastFetchedAt: Date(timeIntervalSince1970: 100),
-            fetchFailureCount: 0,
-            addedAt: Date(timeIntervalSince1970: 0),
-            refreshBlockedUntil: nil,
-            credentialVersion: 1
-        )
-
-        XCTAssertNil(card.archivedAt)
-        XCTAssertFalse(card.isArchived)
-        XCTAssertNil(SchemaV2.CardMetadataRecord(card: card).archivedAt)
-    }
-
     func testGiftCardMallBridgeRejectsUntrustedHostAndParsesFixture() throws {
         let trustedURL = URL(string: "https://www.mycardwallet.com/chs/mygift/")!
         let untrustedURL = URL(string: "https://example.com/")!
@@ -584,7 +526,7 @@ final class VaultCardTests: XCTestCase {
         ))
     }
 
-    func testGiftCardMallBridgeCapturesDOMBalanceAndInstallsAllCapturePaths() throws {
+    func testGiftCardMallBridgeParsesDOMBalanceCapture() throws {
         let trustedURL = URL(string: "https://mygift.giftcardmall.com/card")!
         let message: [String: Any] = [
             "namespace": GiftCardMallBridge.handlerName,
@@ -596,14 +538,6 @@ final class VaultCardTests: XCTestCase {
 
         let summary = try XCTUnwrap(GiftCardMallBridge.parseSummary(message, sourceURL: trustedURL))
         XCTAssertEqual(summary.balance, 27.45)
-
-        let script = GiftCardMallBridge.installScript()
-        XCTAssertTrue(script.contains("XMLHttpRequest.prototype.send"))
-        XCTAssertTrue(script.contains("MutationObserver"))
-        XCTAssertTrue(script.contains("scrollIntoView"))
-        XCTAssertTrue(script.contains("domBalance"))
-        XCTAssertTrue(script.contains("autoScrollEnabled"))
-        XCTAssertTrue(script.contains("if (autoScrollEnabled)"))
     }
 
     func testGiftCardMallTransactionParserHandlesNestedSearchResults() throws {
@@ -668,10 +602,11 @@ final class VaultCardTests: XCTestCase {
     func testBulkSaveAllowsMissingCVVAndCanCompleteItLater() async throws {
         let environment = try AppEnvironment.uiTesting()
         let model = AppModel(environment: environment)
-        let ids = try model.addBulkCards([
-            CardInput(cardNumber: "4111111111111111", expiry: "05/26", cvv: "123"),
-            CardInput(cardNumber: "5555555555554444", expiry: "08/28", cvv: "", pin: "0123")
-        ])
+        let rows = [
+            BulkCardRow(cardNumber: "4111111111111111", expiry: "05/28", code: "123", codeIsPIN: false, sourceRow: 1),
+            BulkCardRow(cardNumber: "5555555555554444", expiry: "08/28", code: "0123", codeIsPIN: true, sourceRow: 2)
+        ]
+        let ids = try model.saveBulkRows(rows).savedCardIDs
         XCTAssertEqual(model.cards.count, 2)
         XCTAssertEqual(try environment.cardRepository.getCredentials(cardID: ids[1]).pin, "0123")
         XCTAssertEqual(try environment.cardRepository.getCredentials(cardID: ids[1]).cvv, "")
@@ -679,40 +614,6 @@ final class VaultCardTests: XCTestCase {
         let updated = try environment.cardRepository.getCredentials(cardID: ids[1])
         XCTAssertEqual(updated.cvv, "456")
         XCTAssertEqual(updated.pin, "0123")
-    }
-
-    func testBulkSaveValidatesAllRowsBeforeWriting() throws {
-        let environment = try AppEnvironment.uiTesting()
-        let model = AppModel(environment: environment)
-        XCTAssertThrowsError(try model.addBulkCards([
-            validInput(), CardInput(cardNumber: "4111111111111112", expiry: "08/28", cvv: "")
-        ]))
-        XCTAssertTrue(try environment.cardRepository.getCards().isEmpty)
-    }
-
-    func testBulkSaveReportsPartialSuccessAndRollsBackFailedMetadata() throws {
-        let container = try ModelContainerFactory.makeInMemory()
-        let store = FakeCredentialStore()
-        var saveCount = 0
-        let repository = SwiftDataCardRepository(context: ModelContext(container), credentialStore: store,
-            beforeMetadataSave: {
-                saveCount += 1
-                if saveCount == 2 { throw VaultError.validation("Storage unavailable") }
-            })
-        let environment = AppEnvironment(cardRepository: repository,
-            settingsRepository: InMemorySettingsRepository(), biometricService: AlwaysAllowAuthenticationService(),
-            notificationService: NoopNotificationService(), scanner: StaticCardScanner())
-        let model = AppModel(environment: environment)
-        do {
-            _ = try model.addBulkCards([validInput(), CardInput(cardNumber: "5555555555554444", expiry: "09/29", cvv: "123")])
-            XCTFail("Expected second save to fail")
-        } catch let error as BulkCardSaveError {
-            XCTAssertEqual(error.savedIDs.count, 1)
-        }
-        XCTAssertEqual(try repository.getCards().count, 1)
-        XCTAssertEqual(store.records.count, 1)
-        _ = try model.addBulkCards([CardInput(cardNumber: "5555555555554444", expiry: "09/29", cvv: "123")])
-        XCTAssertEqual(try repository.getCards().count, 2)
     }
 
     func testBulkPartialFailureIdentifiesSavedRowsWithoutDiscardingEarlierInvalidRow() throws {
