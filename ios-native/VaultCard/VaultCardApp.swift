@@ -184,6 +184,7 @@ struct AppSettings: Codable, Equatable {
     var addCardPreference = AddCardPreference.scan
     var hasSeenSwipeArchiveConfirmation = false
     var archiveZeroBalanceCardsAutomatically = true
+    var askAboutZeroBalanceCards = true
     var hasCleanedUncheckedDuplicates = false
 
     private enum CodingKeys: String, CodingKey {
@@ -194,6 +195,7 @@ struct AppSettings: Codable, Equatable {
         case addCardPreference
         case hasSeenSwipeArchiveConfirmation
         case archiveZeroBalanceCardsAutomatically
+        case askAboutZeroBalanceCards
         case hasCleanedUncheckedDuplicates
     }
 
@@ -208,6 +210,7 @@ struct AppSettings: Codable, Equatable {
         addCardPreference = try values.decodeIfPresent(AddCardPreference.self, forKey: .addCardPreference) ?? .scan
         hasSeenSwipeArchiveConfirmation = try values.decodeIfPresent(Bool.self, forKey: .hasSeenSwipeArchiveConfirmation) ?? false
         archiveZeroBalanceCardsAutomatically = try values.decodeIfPresent(Bool.self, forKey: .archiveZeroBalanceCardsAutomatically) ?? true
+        askAboutZeroBalanceCards = try values.decodeIfPresent(Bool.self, forKey: .askAboutZeroBalanceCards) ?? true
         hasCleanedUncheckedDuplicates = try values.decodeIfPresent(Bool.self, forKey: .hasCleanedUncheckedDuplicates) ?? false
     }
 }
@@ -215,18 +218,18 @@ struct AppSettings: Codable, Equatable {
 struct ZeroBalancePrompt: Identifiable, Equatable {
     enum Kind: Equatable { case autoArchived, offerArchive }
 
+    let id: UUID
     let cardID: String
     let cardName: String
     let last4: String
     let kind: Kind
-
-    var id: String { cardID }
 }
 
 enum ZeroBalancePromptAction {
     case done
     case keepThisCard
     case notNow
+    case alwaysKeep
     case archiveThisCard
     case alwaysArchive
 }
@@ -2191,6 +2194,10 @@ final class AppModel {
             automaticArchiveDates[prompt.cardID] = nil
             do { try unarchiveCard(id: prompt.cardID) }
             catch { alertMessage = error.localizedDescription }
+        case .alwaysKeep:
+            settings.archiveZeroBalanceCardsAutomatically = false
+            settings.askAboutZeroBalanceCards = false
+            saveSettings()
         case .archiveThisCard:
             guard isKnownZeroBalanceActiveCard(prompt.cardID) else { return }
             do { try archiveCard(id: prompt.cardID) }
@@ -2248,14 +2255,14 @@ final class AppModel {
                 automaticArchiveRefreshIDs[id] = checkID
                 automaticArchiveDates[id] = cards.first(where: { $0.id == id })?.archivedAt
                 zeroBalancePrompt = ZeroBalancePrompt(
-                    cardID: id, cardName: card.displayName, last4: card.last4, kind: .autoArchived
+                    id: UUID(), cardID: id, cardName: card.displayName, last4: card.last4, kind: .autoArchived
                 )
             } catch {
                 alertMessage = error.localizedDescription
             }
-        } else {
+        } else if settings.askAboutZeroBalanceCards {
             zeroBalancePrompt = ZeroBalancePrompt(
-                cardID: id, cardName: card.displayName, last4: card.last4, kind: .offerArchive
+                id: UUID(), cardID: id, cardName: card.displayName, last4: card.last4, kind: .offerArchive
             )
         }
     }
@@ -2430,38 +2437,15 @@ struct RootView: View {
         .tint(VaultTheme.electricBlue)
         .task { await model.start() }
         .alert(
-            model.zeroBalancePrompt.map { $0.kind == .autoArchived ? "Automatically archived" : "No balance left" } ?? "VaultCard",
+            "VaultCard",
             isPresented: Binding(
-                get: { model.alertMessage != nil || model.zeroBalancePrompt != nil },
-                set: { isPresented in
-                    guard !isPresented else { return }
-                    if let prompt = model.zeroBalancePrompt {
-                        model.resolveZeroBalancePrompt(prompt.kind == .autoArchived ? .done : .notNow)
-                    }
-                    model.alertMessage = nil
-                }
+                get: { model.alertMessage != nil },
+                set: { isPresented in if !isPresented { model.alertMessage = nil } }
             )
         ) {
-            if let prompt = model.zeroBalancePrompt {
-                if prompt.kind == .autoArchived {
-                    Button("Leave Archived", role: .cancel) { model.resolveZeroBalancePrompt(.done) }
-                    Button("Restore to Vault") { model.resolveZeroBalancePrompt(.keepThisCard) }
-                } else {
-                    Button("Not Now", role: .cancel) { model.resolveZeroBalancePrompt(.notNow) }
-                    Button("Archive This Card") { model.resolveZeroBalancePrompt(.archiveThisCard) }
-                    Button("Always Archive $0 Cards") { model.resolveZeroBalancePrompt(.alwaysArchive) }
-                }
-            } else {
-                Button("OK", role: .cancel) { model.alertMessage = nil }
-            }
+            Button("OK", role: .cancel) { model.alertMessage = nil }
         } message: {
-            if let prompt = model.zeroBalancePrompt {
-                Text(prompt.kind == .autoArchived
-                     ? "\(prompt.cardName) (•••• \(prompt.last4)) has a $0.00 balance and was moved to Archived Cards because automatic archiving is on. Its details and history are saved.\n\nRestoring it brings it back to your Vault for now. Future $0 balance checks will still archive it automatically."
-                     : "\(prompt.cardName) (•••• \(prompt.last4)) has a $0.00 balance. Archive this card, or turn on automatic archiving for future $0 balances.")
-            } else {
-                Text(model.alertMessage ?? "")
-            }
+            Text(model.alertMessage ?? "")
         }
         .onReceive(NotificationCenter.default.publisher(for: .vaultcardOpenReminderCard)) { notification in
             if let id = notification.object as? String { model.openReminderCard(id: id) }
@@ -4873,12 +4857,29 @@ struct GiftCardMallRefreshView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if let summary, !pageLoadFailed, showBalanceSaved || canOfferUseReminder {
+            if let summary, !pageLoadFailed, showBalanceSaved || canOfferUseReminder || automaticArchiveNotice != nil {
                 VStack(alignment: .leading, spacing: 8) {
-                    if showBalanceSaved {
+                    if showBalanceSaved && automaticArchiveNotice == nil {
                         Label("Balance saved: \(summary.balance.formatted(.currency(code: "USD")))", systemImage: "checkmark.circle.fill")
                             .font(.subheadline.weight(.semibold))
                             .accessibilityIdentifier("balance.saved")
+                    }
+                    if let prompt = automaticArchiveNotice {
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Label("Archived automatically", systemImage: "archivebox.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .accessibilityIdentifier("balance.archived")
+                                Text("\(prompt.cardName) (•••• \(prompt.last4)) moved to Archived Cards.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 8)
+                            Button("Undo") { model.resolveZeroBalancePrompt(.keepThisCard) }
+                                .font(.subheadline.weight(.semibold))
+                                .frame(minWidth: 44, minHeight: 44)
+                                .accessibilityIdentifier("balance.archiveUndo")
+                        }
                     }
                     if let card = model.cards.first(where: { $0.id == cardID }), !card.isArchived,
                        let balance = card.balance, balance > 0, balance < 10 {
@@ -4891,6 +4892,26 @@ struct GiftCardMallRefreshView: View {
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
+            }
+        }
+        .confirmationDialog(
+            "No balance left",
+            isPresented: Binding(
+                get: { archiveChoicePrompt != nil },
+                set: { isPresented in
+                    guard !isPresented, archiveChoicePrompt != nil else { return }
+                    model.resolveZeroBalancePrompt(.notNow)
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Keep This Time", role: .cancel) { model.resolveZeroBalancePrompt(.notNow) }
+            Button("Always Keep in Vault") { model.resolveZeroBalancePrompt(.alwaysKeep) }
+            Button("Archive This Card") { model.resolveZeroBalancePrompt(.archiveThisCard) }
+            Button("Always Archive $0 Cards") { model.resolveZeroBalancePrompt(.alwaysArchive) }
+        } message: {
+            if let prompt = archiveChoicePrompt {
+                Text("\(prompt.cardName) (•••• \(prompt.last4)) has a $0.00 balance. The “Always” options remember your choice.")
             }
         }
         .sheet(isPresented: $showUseReminder) {
@@ -4907,8 +4928,17 @@ struct GiftCardMallRefreshView: View {
             do { try await Task.sleep(for: .seconds(4)) } catch { return }
             showBalanceSaved = false
         }
+        .task(id: model.zeroBalancePrompt?.id) {
+            guard let notice = automaticArchiveNotice else { return }
+            do { try await Task.sleep(for: .seconds(8)) } catch { return }
+            guard model.zeroBalancePrompt?.id == notice.id else { return }
+            model.resolveZeroBalancePrompt(.done)
+        }
         .task { await prepareBrowserAfterTransition() }
-        .onDisappear { credentials = nil }
+        .onDisappear {
+            credentials = nil
+            if automaticArchiveNotice != nil { model.resolveZeroBalancePrompt(.done) }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
@@ -4936,6 +4966,20 @@ struct GiftCardMallRefreshView: View {
         guard let card = model.cards.first(where: { $0.id == cardID }), !card.isArchived,
               let balance = card.balance else { return false }
         return balance.isFinite && balance > 0 && balance < 10
+    }
+
+    private var automaticArchiveNotice: ZeroBalancePrompt? {
+        guard let prompt = model.zeroBalancePrompt,
+              prompt.cardID == cardID,
+              prompt.kind == .autoArchived else { return nil }
+        return prompt
+    }
+
+    private var archiveChoicePrompt: ZeroBalancePrompt? {
+        guard let prompt = model.zeroBalancePrompt,
+              prompt.cardID == cardID,
+              prompt.kind == .offerArchive else { return nil }
+        return prompt
     }
 
     private func reloadPage() {
@@ -5437,9 +5481,24 @@ struct SettingsView: View {
                     )) {
                         Text("Archive $0 cards automatically")
                     }
-                    Text("After a successful balance check reports $0, the card moves to Archived Cards. You can keep it in your Vault from the confirmation.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if model.settings.archiveZeroBalanceCardsAutomatically {
+                        Text("Cards with a $0 balance move to Archived Cards after a balance check. A brief confirmation includes Undo; no tap is needed.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Toggle(isOn: Binding(
+                            get: { model.settings.askAboutZeroBalanceCards },
+                            set: { value in model.updateSettings { $0.askAboutZeroBalanceCards = value } }
+                        )) {
+                            Text("Ask about $0 cards")
+                        }
+                        .accessibilityIdentifier("settings.askZeroBalance")
+                        Text(model.settings.askAboutZeroBalanceCards
+                             ? "Choose whether to archive each $0 card."
+                             : "$0 cards stay in your Vault without prompts. You can archive them manually.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Section("Security") {
                     Label("Face ID", systemImage: "faceid")

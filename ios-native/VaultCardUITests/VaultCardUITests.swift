@@ -404,60 +404,65 @@ final class VaultCardUITests: XCTestCase {
         XCTAssertTrue(retry.isHittable)
     }
 
-    func testAutoArchiveNoticeExplainsBothOutcomesWithoutChangingPreference() throws {
-        for restoreToVault in [false, true] {
+    func testAutomaticArchivingNeedsNoTapAndOffersUndo() throws {
+        for undoArchive in [false, true] {
             let app = XCUIApplication()
             app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-zero-refresh"]
             app.launch()
             openSeededCardForBalance(app)
             app.buttons["detail.refresh"].tap()
-            let popup = app.alerts["Automatically archived"]
-            XCTAssertTrue(popup.waitForExistence(timeout: 5))
-            XCTAssertTrue(popup.buttons["Leave Archived"].exists)
-            XCTAssertTrue(popup.buttons["Restore to Vault"].exists)
-            XCTAssertTrue(popup.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "because automatic archiving is on")).firstMatch.exists)
+            XCTAssertTrue(app.staticTexts["balance.archived"].waitForExistence(timeout: 5))
+            XCTAssertFalse(app.alerts.firstMatch.exists)
+            XCTAssertFalse(app.sheets.firstMatch.exists)
             let screenshot = XCTAttachment(screenshot: app.screenshot())
-            screenshot.name = "Automatic archive with explicit outcomes"
+            screenshot.name = "Automatic archive without interruption"
             screenshot.lifetime = .keepAlways
             add(screenshot)
-            popup.buttons[restoreToVault ? "Restore to Vault" : "Leave Archived"].tap()
-            XCTAssertFalse(popup.exists)
+            if undoArchive { app.buttons["balance.archiveUndo"].tap() }
             app.navigationBars["Check Balance"].buttons.element(boundBy: 0).tap()
-            XCTAssertTrue(app.buttons[restoreToVault ? "detail.archive" : "detail.restore"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons[undoArchive ? "detail.archive" : "detail.restore"].waitForExistence(timeout: 5))
             app.buttons["tray.settings"].tap()
             XCTAssertEqual(app.switches["Archive $0 cards automatically"].value as? String, "1")
             app.terminate()
         }
     }
 
-    func testDisabledAutoArchiveOffersOneTimeAndAlwaysChoices() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-zero-refresh"]
-        app.launch()
-        app.buttons["tray.settings"].tap()
-        let toggle = app.switches["Archive $0 cards automatically"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
-        XCTAssertEqual(toggle.value as? String, "1")
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
-        XCTAssertEqual(toggle.value as? String, "0")
-        app.buttons["tray.vault"].tap()
-        openSeededCardForBalance(app)
-        app.buttons["detail.refresh"].tap()
-        let popup = app.alerts["No balance left"]
-        XCTAssertTrue(popup.waitForExistence(timeout: 5))
-        XCTAssertTrue(popup.buttons["Not Now"].exists)
-        XCTAssertTrue(popup.buttons["Archive This Card"].exists)
-        XCTAssertTrue(popup.buttons["Always Archive $0 Cards"].exists)
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Zero balance archive choices"
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
-        popup.buttons["Always Archive $0 Cards"].tap()
-        XCTAssertFalse(popup.exists)
-        app.navigationBars["Check Balance"].buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.buttons["detail.restore"].waitForExistence(timeout: 5))
-        app.buttons["tray.settings"].tap()
-        XCTAssertEqual(app.switches["Archive $0 cards automatically"].value as? String, "1")
+    func testZeroBalanceChoicesRememberKeepOrArchiveAndAllowAskingAgain() throws {
+        for alwaysArchive in [false, true] {
+            let app = XCUIApplication()
+            app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-zero-refresh"]
+            app.launch()
+            app.buttons["tray.settings"].tap()
+            let toggle = app.switches["Archive $0 cards automatically"]
+            XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+            app.buttons["tray.vault"].tap()
+            openSeededCardForBalance(app)
+            app.buttons["detail.refresh"].tap()
+            let choice = app.buttons[alwaysArchive ? "Always Archive $0 Cards" : "Always Keep in Vault"]
+            XCTAssertTrue(choice.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["Archive This Card"].exists)
+            choice.tap()
+            app.navigationBars["Check Balance"].buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(app.buttons[alwaysArchive ? "detail.restore" : "detail.archive"].waitForExistence(timeout: 5))
+            app.buttons["tray.settings"].tap()
+            XCTAssertEqual(app.switches["Archive $0 cards automatically"].value as? String, alwaysArchive ? "1" : "0")
+            if !alwaysArchive {
+                let ask = app.switches["settings.askZeroBalance"]
+                XCTAssertEqual(ask.value as? String, "0")
+                app.buttons["tray.vault"].tap()
+                openSeededCardForBalance(app, last4: "4444")
+                app.buttons["detail.refresh"].tap()
+                XCTAssertTrue(app.staticTexts["balance.saved"].waitForExistence(timeout: 5))
+                XCTAssertFalse(app.buttons["Always Keep in Vault"].exists)
+                XCTAssertFalse(app.staticTexts["balance.archived"].exists)
+                app.navigationBars["Check Balance"].buttons.element(boundBy: 0).tap()
+                app.buttons["tray.settings"].tap()
+                ask.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+                XCTAssertEqual(ask.value as? String, "1")
+            }
+            app.terminate()
+        }
     }
 
     func testZeroBalanceListFilterAndBulkArchive() throws {
@@ -609,7 +614,11 @@ final class VaultCardUITests: XCTestCase {
         let row = app.buttons["card.row." + last4]
         for _ in 0..<6 {
             if row.exists, row.frame.minY > 120, row.frame.maxY < app.frame.height - 180 { break }
-            app.collectionViews.firstMatch.swipeUp()
+            if row.exists, row.frame.minY <= 120 {
+                app.collectionViews.firstMatch.swipeDown()
+            } else {
+                app.collectionViews.firstMatch.swipeUp()
+            }
         }
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         row.tap()
