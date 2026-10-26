@@ -29,6 +29,66 @@ enum TransactionAmountOrder {
     }
 }
 
+struct TransactionAmountRange: Equatable {
+    var minimum: Double? = nil
+    var maximum: Double? = nil
+
+    var isActive: Bool { minimum != nil || maximum != nil }
+
+    func includes(_ amount: Double) -> Bool {
+        guard amount.isFinite else { return false }
+        let magnitude = abs(amount)
+        return (minimum.map { magnitude >= $0 } ?? true)
+            && (maximum.map { magnitude <= $0 } ?? true)
+    }
+
+    static func parse(minimum: String, maximum: String, locale: Locale = .current) throws -> Self {
+        let lower = try bound(minimum, locale: locale)
+        let upper = try bound(maximum, locale: locale)
+        if let lower, let upper, lower > upper {
+            throw VaultError.validation("Minimum amount must be no greater than maximum amount.")
+        }
+        return Self(minimum: lower, maximum: upper)
+    }
+
+    private static func bound(_ text: String, locale: Locale) throws -> Double? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        let formatter = NumberFormatter()
+        formatter.locale = locale
+        formatter.numberStyle = .decimal
+        let decimal = formatter.decimalSeparator ?? "."
+        let grouping = formatter.groupingSeparator ?? ","
+        let d = NSRegularExpression.escapedPattern(for: decimal)
+        let g = NSRegularExpression.escapedPattern(for: grouping)
+        let whole = "(?:[0-9]+|[0-9]{1,3}(?:\(g)[0-9]{3})+)"
+        let pattern = "^(?:\(whole)(?:\(d)[0-9]{0,2})?|\(d)[0-9]{1,2})$"
+        let normalized = value.replacingOccurrences(of: grouping, with: "")
+            .replacingOccurrences(of: decimal, with: ".")
+        guard value.range(of: pattern, options: .regularExpression) != nil,
+              let amount = Double(normalized), amount.isFinite, amount >= 0 else {
+            throw VaultError.validation("Enter a positive amount with up to two decimal places. Use Debits or Credits to choose the transaction type.")
+        }
+        return amount
+    }
+}
+
+enum TransactionInitialLoad {
+    static func key(cardID: String, transactionID: String) -> String {
+        "\(cardID):\(transactionID)"
+    }
+
+    static func ids(for card: VaultCard, overrides: [String: Bool]) -> Set<String> {
+        let credits = card.transactions.filter { $0.amount.isFinite && $0.amount > 0 }
+        let marked = credits.filter { overrides[key(cardID: card.id, transactionID: $0.id)] == true }
+        if !marked.isEmpty { return Set(marked.map(\.id)) }
+        guard let first = credits.min(by: {
+            $0.date != $1.date ? $0.date < $1.date : $0.id < $1.id
+        }), overrides[key(cardID: card.id, transactionID: first.id)] != false else { return [] }
+        return [first.id]
+    }
+}
+
 struct TransactionAppearance {
     enum Kind: Equatable {
         case debit

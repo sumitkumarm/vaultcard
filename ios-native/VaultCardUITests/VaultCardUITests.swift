@@ -586,6 +586,53 @@ final class VaultCardUITests: XCTestCase {
         XCTAssertTrue(app.buttons["activity.sort"].label.contains("Newest first"))
     }
 
+    func testAmountRangeAndInitialLoadFiltersAllowManualCorrections() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-seed-activity", "--ui-testing-seed-signed-activity"]
+        app.launch()
+        app.buttons["cards.activity"].tap()
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "activity.transaction."))
+        app.buttons["activity.filters"].tap()
+        let minimum = app.textFields["activity.amount.minimum"]
+        XCTAssertTrue(minimum.waitForExistence(timeout: 5))
+        minimum.tap()
+        minimum.typeText("20")
+        app.textFields["activity.amount.maximum"].tap()
+        app.textFields["activity.amount.maximum"].typeText("200")
+        app.buttons["activity.filters.apply"].tap()
+        XCTAssertTrue(app.staticTexts["5"].waitForExistence(timeout: 5))
+        app.buttons["activity.filters"].tap()
+        let hideLoads = app.switches["activity.hideInitialLoads"]
+        XCTAssertTrue(hideLoads.waitForExistence(timeout: 5))
+        hideLoads.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        app.buttons["activity.filters.apply"].tap()
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertFalse(rows.matching(NSPredicate(format: "label CONTAINS %@", "Initial load")).firstMatch.exists)
+        let filtered = XCTAttachment(screenshot: app.screenshot())
+        filtered.name = "Amount range with initial loads hidden"
+        filtered.lifetime = .keepAlways
+        add(filtered)
+        app.buttons["activity.filter.remove.amount"].tap()
+        XCTAssertEqual(rows.count, 3)
+        app.buttons["activity.filter.remove.initialLoads"].tap()
+        app.segmentedControls["activity.direction"].buttons["Credits"].tap()
+        XCTAssertEqual(rows.count, 3)
+        let initialLoad = rows.element(boundBy: 0)
+        let rowID = initialLoad.identifier
+        initialLoad.press(forDuration: 1)
+        app.buttons["Not an Initial Load"].tap()
+        XCTAssertFalse(app.buttons[rowID].label.hasSuffix(", Initial load"))
+        app.buttons["activity.filters"].tap()
+        hideLoads.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        app.buttons["activity.filters.apply"].tap()
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.element(boundBy: 0).identifier, rowID)
+        app.buttons["activity.filter.remove.initialLoads"].tap()
+        app.buttons[rowID].press(forDuration: 1)
+        app.buttons["Reset Initial Load Detection"].tap()
+        XCTAssertTrue(app.buttons[rowID].label.hasSuffix(", Initial load"))
+    }
+
     func testLowBalanceRefreshCanScheduleEditAndCancelUseReminder() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards", "--ui-testing-low-refresh"]

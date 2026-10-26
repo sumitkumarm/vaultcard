@@ -186,6 +186,7 @@ struct AppSettings: Codable, Equatable {
     var archiveZeroBalanceCardsAutomatically = true
     var askAboutZeroBalanceCards = true
     var hasCleanedUncheckedDuplicates = false
+    var transactionInitialLoadOverrides: [String: Bool] = [:]
 
     private enum CodingKeys: String, CodingKey {
         case onboardingCompleted
@@ -197,6 +198,7 @@ struct AppSettings: Codable, Equatable {
         case archiveZeroBalanceCardsAutomatically
         case askAboutZeroBalanceCards
         case hasCleanedUncheckedDuplicates
+        case transactionInitialLoadOverrides
     }
 
     init() {}
@@ -212,6 +214,7 @@ struct AppSettings: Codable, Equatable {
         archiveZeroBalanceCardsAutomatically = try values.decodeIfPresent(Bool.self, forKey: .archiveZeroBalanceCardsAutomatically) ?? true
         askAboutZeroBalanceCards = try values.decodeIfPresent(Bool.self, forKey: .askAboutZeroBalanceCards) ?? true
         hasCleanedUncheckedDuplicates = try values.decodeIfPresent(Bool.self, forKey: .hasCleanedUncheckedDuplicates) ?? false
+        transactionInitialLoadOverrides = try values.decodeIfPresent([String: Bool].self, forKey: .transactionInitialLoadOverrides) ?? [:]
     }
 }
 
@@ -2132,6 +2135,15 @@ final class AppModel {
     func showArchivedZeroBalanceCards() {
         guard routePath.last != .archivedZeroBalance else { return }
         routePath = [.archivedZeroBalance]
+    }
+
+    func setTransactionInitialLoad(cardID: String, transactionID: String, isInitialLoad: Bool?) {
+        guard let card = cards.first(where: { $0.id == cardID }),
+              let transaction = card.transactions.first(where: { $0.id == transactionID }),
+              transaction.amount.isFinite, transaction.amount > 0 else { return }
+        let key = TransactionInitialLoad.key(cardID: cardID, transactionID: transactionID)
+        settings.transactionInitialLoadOverrides[key] = isInitialLoad
+        saveSettings()
     }
 
     func showActivity() {
