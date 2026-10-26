@@ -20,13 +20,14 @@ private enum ActivityDateRange: String, CaseIterable, Identifiable {
 
 private struct ActivityFilterConfiguration {
     var sort = ActivitySortOption.newest
+    var direction = TransactionDirectionFilter.all
     var dateRange = ActivityDateRange.all
     var startDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     var endDate = Date()
     var selectedCardIDs = Set<String>()
 
     var hasFilters: Bool {
-        dateRange != .all || !selectedCardIDs.isEmpty
+        direction != .all || dateRange != .all || !selectedCardIDs.isEmpty
     }
 
     var activeControlCount: Int {
@@ -105,6 +106,9 @@ struct ActivityView: View {
 
         let selectedCardIDs = filters.selectedCardIDs
         let filtered = entries.filter { entry in
+            if !filters.direction.includes(entry.amount) {
+                return false
+            }
             if !selectedCardIDs.isEmpty && !selectedCardIDs.contains(entry.cardID) {
                 return false
             }
@@ -127,9 +131,11 @@ struct ActivityView: View {
             case .oldest:
                 if lhs.date != rhs.date { return lhs.date < rhs.date }
             case .highestAmount:
-                if lhs.amount != rhs.amount { return lhs.amount > rhs.amount }
+                if TransactionAmountOrder.highest.precedes(lhs.amount, rhs.amount) { return true }
+                if TransactionAmountOrder.highest.precedes(rhs.amount, lhs.amount) { return false }
             case .lowestAmount:
-                if lhs.amount != rhs.amount { return lhs.amount < rhs.amount }
+                if TransactionAmountOrder.lowest.precedes(lhs.amount, rhs.amount) { return true }
+                if TransactionAmountOrder.lowest.precedes(rhs.amount, lhs.amount) { return false }
             }
             return lhs.id < rhs.id
         }
@@ -234,6 +240,8 @@ struct ActivityView: View {
             .frame(minHeight: 48)
             .vaultGlass(cornerRadius: 14)
 
+            directionPicker
+
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) {
                     filterButton
@@ -245,6 +253,13 @@ struct ActivityView: View {
                     sortMenu
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if filters.sort == .highestAmount || filters.sort == .lowestAmount {
+                Text("Amount sorting ignores +/− signs.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("activity.sort.magnitude-note")
             }
             if hasChanges {
                 HStack {
@@ -261,6 +276,19 @@ struct ActivityView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 4)
+    }
+
+    private var directionPicker: some View {
+        Picker("Direction", selection: $filters.direction) {
+            ForEach(TransactionDirectionFilter.allCases) { direction in
+                Text(direction.rawValue)
+                    .tag(direction)
+                    .accessibilityIdentifier("activity.direction.\(direction.rawValue.lowercased())")
+            }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityLabel("Activity direction")
+        .accessibilityIdentifier("activity.direction")
     }
 
     private var filterButton: some View {
@@ -317,8 +345,18 @@ struct ActivityView: View {
     }
 
     private func filteredSummary(total: Double, count: Int) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("\(filters.selectedCardIDs.isEmpty ? "All cards" : "Selected cards") • \(dateScope)")
+        let amountSummary: (title: String, value: Double)
+        switch filters.direction {
+        case .all:
+            amountSummary = ("Net amount", total)
+        case .debits:
+            amountSummary = ("Total spent", abs(total))
+        case .credits:
+            amountSummary = ("Total credited", total)
+        }
+
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("\(filters.direction == .all ? "All transactions" : filters.direction.rawValue) • \(filters.selectedCardIDs.isEmpty ? "All cards" : "Selected cards") • \(dateScope)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("activity.scope")
@@ -334,7 +372,7 @@ struct ActivityView: View {
                 }
             }
             HStack(spacing: 20) {
-                summaryMetric(title: "Net amount", value: total.formatted(.currency(code: "USD")))
+                summaryMetric(title: amountSummary.title, value: amountSummary.value.formatted(.currency(code: "USD")))
                 Divider().frame(height: 36)
                 summaryMetric(title: "Transactions", value: count.formatted())
             }
