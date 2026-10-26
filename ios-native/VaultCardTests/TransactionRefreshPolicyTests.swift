@@ -133,3 +133,18 @@ final class TransactionRefreshPolicyTests: XCTestCase {
         return calendar.date(from: components)!
     }
 }
+
+final class TransactionDirectionAndAmountTests: XCTestCase {
+    func testDirectionAndAmountOrderingPreserveSignedValues() {
+        let amounts = [-100.0, 20, -5, 200, 0]
+        XCTAssertEqual(amounts.filter(TransactionDirectionFilter.debits.includes), [-100, -5])
+        XCTAssertEqual(amounts.filter(TransactionDirectionFilter.credits.includes), [20, 200])
+        XCTAssertEqual(amounts.filter(TransactionDirectionFilter.all.includes), amounts)
+        XCTAssertEqual(amounts.sorted(by: TransactionAmountOrder.highest.precedes), [200, -100, 20, -5, 0])
+        XCTAssertEqual(amounts.sorted(by: TransactionAmountOrder.lowest.precedes), [0, -5, 20, -100, 200])
+        XCTAssertFalse(TransactionAmountOrder.highest.precedes(-100, 100))
+        XCTAssertFalse(TransactionAmountOrder.highest.precedes(100, -100))
+        XCTAssertEqual(TransactionAppearance(amount: -100).formattedAmount, "−$100.00")
+        XCTAssertEqual(TransactionAppearance(amount: 20).formattedAmount, "+$20.00")
+    }
+}

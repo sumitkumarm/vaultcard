@@ -1,5 +1,34 @@
 import SwiftUI
 
+enum TransactionDirectionFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case debits = "Debits"
+    case credits = "Credits"
+
+    var id: String { rawValue }
+
+    func includes(_ amount: Double) -> Bool {
+        guard amount.isFinite else { return false }
+        switch self {
+        case .all: return true
+        case .debits: return amount < 0
+        case .credits: return amount > 0
+        }
+    }
+}
+
+enum TransactionAmountOrder {
+    case highest
+    case lowest
+
+    func precedes(_ lhs: Double, _ rhs: Double) -> Bool {
+        switch self {
+        case .highest: return abs(lhs) > abs(rhs)
+        case .lowest: return abs(lhs) < abs(rhs)
+        }
+    }
+}
+
 struct TransactionAppearance {
     enum Kind: Equatable {
         case debit

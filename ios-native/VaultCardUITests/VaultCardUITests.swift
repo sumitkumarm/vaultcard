@@ -554,6 +554,36 @@ final class VaultCardUITests: XCTestCase {
         activity.name = "Credits and debits in activity"
         activity.lifetime = .keepAlways
         add(activity)
+
+        let directions = app.segmentedControls["activity.direction"]
+        XCTAssertTrue(directions.waitForExistence(timeout: 5))
+        directions.buttons["Debits"].tap()
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "activity.transaction."))
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertTrue(app.staticTexts["Total spent"].exists)
+        XCTAssertFalse(rows.matching(NSPredicate(format: "label CONTAINS %@", "Initial load")).firstMatch.exists)
+        app.buttons["activity.sort"].tap()
+        app.buttons["Highest amount"].tap()
+        XCTAssertTrue(rows.element(boundBy: 0).label.contains("Book Shop"))
+        XCTAssertTrue(rows.element(boundBy: 0).label.contains("Debit"))
+        let spending = XCTAttachment(screenshot: app.screenshot())
+        spending.name = "Spending ordered by amount without initial loads"
+        spending.lifetime = .keepAlways
+        add(spending)
+        app.buttons["activity.sort"].tap()
+        app.buttons["Lowest amount"].tap()
+        XCTAssertTrue(rows.element(boundBy: 0).label.contains("Corner Coffee"))
+        directions.buttons["Credits"].tap()
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertTrue(app.staticTexts["Total credited"].exists)
+        XCTAssertTrue(rows.element(boundBy: 0).label.contains("Initial load"))
+        XCTAssertFalse(rows.matching(NSPredicate(format: "label CONTAINS %@", "Debit")).firstMatch.exists)
+        directions.buttons["All"].tap()
+        XCTAssertTrue(app.staticTexts["6"].exists) // Summary counts all rows, including off-screen cells.
+        XCTAssertTrue(app.staticTexts["Net amount"].exists)
+        app.buttons["activity.reset"].tap()
+        XCTAssertTrue(app.staticTexts["6"].exists) // Summary counts all rows, including off-screen cells.
+        XCTAssertTrue(app.buttons["activity.sort"].label.contains("Newest first"))
     }
 
     func testLowBalanceRefreshCanScheduleEditAndCancelUseReminder() throws {
