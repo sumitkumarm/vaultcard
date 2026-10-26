@@ -6,7 +6,9 @@ import XCTest
 final class ZeroBalanceArchiveTests: XCTestCase {
     func testMissingSettingMigratesToAutomaticArchivingAndPersistsChanges() throws {
         let legacy = try XCTUnwrap(#"{"onboardingCompleted":true}"#.data(using: .utf8))
-        XCTAssertTrue(try JSONDecoder().decode(AppSettings.self, from: legacy).archiveZeroBalanceCardsAutomatically)
+        let migrated = try JSONDecoder().decode(AppSettings.self, from: legacy)
+        XCTAssertTrue(migrated.archiveZeroBalanceCardsAutomatically)
+        XCTAssertTrue(migrated.askAboutZeroBalanceCards)
         let optedOut = try XCTUnwrap(#"{"archiveZeroBalanceCardsAutomatically":false}"#.data(using: .utf8))
         XCTAssertFalse(try JSONDecoder().decode(AppSettings.self, from: optedOut).archiveZeroBalanceCardsAutomatically)
 
@@ -36,19 +38,28 @@ final class ZeroBalanceArchiveTests: XCTestCase {
         XCTAssertNil(model.zeroBalancePrompt)
     }
 
-    func testDisabledSettingOffersArchiveChoicesAndAlwaysArchivePersists() throws {
-        var initial = AppSettings()
-        initial.archiveZeroBalanceCardsAutomatically = false
-        let (model, settings) = try makeModel(initialSettings: initial)
-        let cardID = try model.addCard(input())
-        model.beginForegroundRefresh(id: cardID)
-        model.applyForegroundRefresh(id: cardID, result: zeroResult)
+    func testRememberedKeepAndArchiveChoicesApplyToLaterCardsAndPersist() throws {
+        for alwaysArchive in [false, true] {
+            var initial = AppSettings()
+            initial.archiveZeroBalanceCardsAutomatically = false
+            let (model, settings) = try makeModel(initialSettings: initial)
+            let cardID = try model.addCard(input())
+            model.beginForegroundRefresh(id: cardID)
+            model.applyForegroundRefresh(id: cardID, result: zeroResult)
+            XCTAssertEqual(model.zeroBalancePrompt?.kind, .offerArchive)
 
-        XCTAssertEqual(model.zeroBalancePrompt?.kind, .offerArchive)
-        XCTAssertFalse(try XCTUnwrap(model.cards.first { $0.id == cardID }).isArchived)
-        model.resolveZeroBalancePrompt(.alwaysArchive)
-        XCTAssertTrue(settings.load().archiveZeroBalanceCardsAutomatically)
-        XCTAssertTrue(try XCTUnwrap(model.cards.first { $0.id == cardID }).isArchived)
+            model.resolveZeroBalancePrompt(alwaysArchive ? .alwaysArchive : .alwaysKeep)
+            XCTAssertEqual(try XCTUnwrap(model.cards.first { $0.id == cardID }).isArchived, alwaysArchive)
+            let persisted = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings.load()))
+            XCTAssertEqual(persisted.archiveZeroBalanceCardsAutomatically, alwaysArchive)
+            if !alwaysArchive { XCTAssertFalse(persisted.askAboutZeroBalanceCards) }
+
+            let nextID = try model.addCard(input(number: "5555555555554444"))
+            model.beginForegroundRefresh(id: nextID)
+            model.applyForegroundRefresh(id: nextID, result: zeroResult)
+            XCTAssertEqual(try XCTUnwrap(model.cards.first { $0.id == nextID }).isArchived, alwaysArchive)
+            XCTAssertEqual(model.zeroBalancePrompt?.kind, alwaysArchive ? .autoArchived : nil)
+        }
     }
 
     func testArchiveOnceLeavesFutureAutomaticArchivingDisabled() throws {
