@@ -25,14 +25,22 @@ private struct ActivityFilterConfiguration {
     var startDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     var endDate = Date()
     var selectedCardIDs = Set<String>()
+    var amountRange = TransactionAmountRange()
+    var hideInitialLoads = false
 
     var hasFilters: Bool {
-        direction != .all || dateRange != .all || !selectedCardIDs.isEmpty
+        direction != .all
+            || dateRange != .all
+            || !selectedCardIDs.isEmpty
+            || amountRange.isActive
+            || hideInitialLoads
     }
 
     var activeControlCount: Int {
         (dateRange == .all ? 0 : 1)
             + (selectedCardIDs.isEmpty ? 0 : 1)
+            + (amountRange.isActive ? 1 : 0)
+            + (hideInitialLoads ? 1 : 0)
     }
 }
 
@@ -51,8 +59,16 @@ private struct ActivityEntry: Identifiable {
     let date: Date
     let description: String
     let amount: Double
+    let transactionID: String
+    let isInitialLoad: Bool
+    let isInitialLoadInferred: Bool
 
-    init(card: VaultCard, transaction: CardTransaction) {
+    init(
+        card: VaultCard,
+        transaction: CardTransaction,
+        isInitialLoad: Bool = false,
+        isInitialLoadInferred: Bool = false
+    ) {
         id = "\(card.id):\(transaction.id)"
         cardID = card.id
         let nickname = card.nickname?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -63,6 +79,9 @@ private struct ActivityEntry: Identifiable {
         date = transaction.date
         description = transaction.description
         amount = transaction.amount
+        transactionID = transaction.id
+        self.isInitialLoad = isInitialLoad
+        self.isInitialLoadInferred = isInitialLoadInferred
     }
 }
 
@@ -74,8 +93,19 @@ struct ActivityView: View {
     @State private var filterPresentation: ActivityFilterPresentation?
 
     private var allEntries: [ActivityEntry] {
-        model.cards.flatMap { card in
-            card.transactions.map { ActivityEntry(card: card, transaction: $0) }
+        let overrides = model.settings.transactionInitialLoadOverrides
+        return model.cards.flatMap { card in
+            let initialLoadIDs = TransactionInitialLoad.ids(for: card, overrides: overrides)
+            return card.transactions.map { transaction in
+                let isInitialLoad = initialLoadIDs.contains(transaction.id)
+                let overrideKey = TransactionInitialLoad.key(cardID: card.id, transactionID: transaction.id)
+                return ActivityEntry(
+                    card: card,
+                    transaction: transaction,
+                    isInitialLoad: isInitialLoad,
+                    isInitialLoadInferred: isInitialLoad && overrides[overrideKey] == nil
+                )
+            }
         }
     }
 
@@ -107,6 +137,12 @@ struct ActivityView: View {
         let selectedCardIDs = filters.selectedCardIDs
         let filtered = entries.filter { entry in
             if !filters.direction.includes(entry.amount) {
+                return false
+            }
+            if !filters.amountRange.includes(entry.amount) {
+                return false
+            }
+            if filters.hideInitialLoads && entry.isInitialLoad {
                 return false
             }
             if !selectedCardIDs.isEmpty && !selectedCardIDs.contains(entry.cardID) {
@@ -172,6 +208,33 @@ struct ActivityView: View {
                                     .listRowBackground(Color.clear)
                                     .accessibilityIdentifier("activity.transaction.\(entry.id)")
                                     .accessibilityHint("Open \(entry.cardName)")
+                                    .contextMenu {
+                                        if entry.amount > 0 {
+                                            Button(entry.isInitialLoad ? "Not an Initial Load" : "Mark as Initial Load") {
+                                                model.setTransactionInitialLoad(
+                                                    cardID: entry.cardID,
+                                                    transactionID: entry.transactionID,
+                                                    isInitialLoad: !entry.isInitialLoad
+                                                )
+                                            }
+                                            .accessibilityIdentifier("activity.load.mark.\(entry.id)")
+
+                                            let overrideKey = TransactionInitialLoad.key(
+                                                cardID: entry.cardID,
+                                                transactionID: entry.transactionID
+                                            )
+                                            if model.settings.transactionInitialLoadOverrides[overrideKey] != nil {
+                                                Button("Reset Initial Load Detection") {
+                                                    model.setTransactionInitialLoad(
+                                                        cardID: entry.cardID,
+                                                        transactionID: entry.transactionID,
+                                                        isInitialLoad: nil
+                                                    )
+                                                }
+                                                .accessibilityIdentifier("activity.load.reset.\(entry.id)")
+                                            }
+                                        }
+                                    }
                                 }
                             } header: {
                                 Text("\(filteredEntries.count) transaction\(filteredEntries.count == 1 ? "" : "s")")
@@ -366,6 +429,16 @@ struct ActivityView: View {
             if filters.dateRange != .all {
                 scopeChip(dateScope, id: "activity.filter.remove.date") { filters.dateRange = .all }
             }
+            if filters.amountRange.isActive {
+                scopeChip(amountRangeScope, id: "activity.filter.remove.amount") {
+                    filters.amountRange = TransactionAmountRange()
+                }
+            }
+            if filters.hideInitialLoads {
+                scopeChip("Initial loads hidden", id: "activity.filter.remove.initialLoads") {
+                    filters.hideInitialLoads = false
+                }
+            }
             ForEach(model.cards.filter { filters.selectedCardIDs.contains($0.id) }) { card in
                 scopeChip("\(card.displayName) •••• \(card.last4)", id: "activity.filter.remove.card.\(card.id)") {
                     filters.selectedCardIDs.remove(card.id)
@@ -385,6 +458,21 @@ struct ActivityView: View {
         .listRowBackground(Color.clear)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("activity.summary")
+    }
+
+    private var amountRangeScope: String {
+        let minimum = filters.amountRange.minimum?.formatted(.currency(code: "USD"))
+        let maximum = filters.amountRange.maximum?.formatted(.currency(code: "USD"))
+        switch (minimum, maximum) {
+        case let (.some(minimum), .some(maximum)):
+            return "Amount: \(minimum)–\(maximum)"
+        case let (.some(minimum), .none):
+            return "Amount: at least \(minimum)"
+        case let (.none, .some(maximum)):
+            return "Amount: up to \(maximum)"
+        case (.none, .none):
+            return "Amount"
+        }
     }
 
     private func summaryMetric(title: String, value: String) -> some View {
@@ -429,6 +517,7 @@ struct ActivityView: View {
 }
 
 private struct ActivityTransactionRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let entry: ActivityEntry
 
     var body: some View {
@@ -440,6 +529,11 @@ private struct ActivityTransactionRow: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
+                    if entry.isInitialLoad {
+                        Text(entry.isInitialLoadInferred ? "Initial load (inferred)" : "Initial load")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(TransactionAppearance(amount: entry.amount).amountColor(for: colorScheme))
+                    }
                     HStack(spacing: 5) {
                         Text(entry.cardName)
                             .lineLimit(1)
@@ -466,6 +560,7 @@ private struct ActivityTransactionRow: View {
             "\(entry.description), \(TransactionAppearance(amount: entry.amount).accessibilityLabel), "
                 + "\(entry.cardName) ending \(entry.last4), "
                 + entry.date.formatted(date: .complete, time: .shortened)
+                + (entry.isInitialLoad ? ", Initial load" : "")
         )
     }
 }
@@ -475,6 +570,9 @@ private struct ActivityFilterSheet: View {
     let cards: [VaultCard]
     let onApply: (ActivityFilterConfiguration) -> Void
     @State private var configuration: ActivityFilterConfiguration
+    @State private var minimumAmountText: String
+    @State private var maximumAmountText: String
+    @State private var amountError: String?
 
     init(
         cards: [VaultCard],
@@ -484,6 +582,9 @@ private struct ActivityFilterSheet: View {
         self.cards = cards
         self.onApply = onApply
         _configuration = State(initialValue: initialConfiguration)
+        _minimumAmountText = State(initialValue: Self.formatAmount(initialConfiguration.amountRange.minimum))
+        _maximumAmountText = State(initialValue: Self.formatAmount(initialConfiguration.amountRange.maximum))
+        _amountError = State(initialValue: nil)
     }
 
     var body: some View {
@@ -499,6 +600,37 @@ private struct ActivityFilterSheet: View {
                         DatePicker("From", selection: $configuration.startDate, displayedComponents: .date)
                         DatePicker("Through", selection: $configuration.endDate, displayedComponents: .date)
                     }
+                }
+
+                Section("Amount") {
+                    HStack(spacing: 12) {
+                        TextField("Min ($)", text: $minimumAmountText)
+                            .keyboardType(.decimalPad)
+                            .accessibilityIdentifier("activity.amount.minimum")
+                        TextField("Max ($)", text: $maximumAmountText)
+                            .keyboardType(.decimalPad)
+                            .accessibilityIdentifier("activity.amount.maximum")
+                    }
+                    Text("Uses transaction size, regardless of credit or debit.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let amountError {
+                        Text(amountError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("activity.amount.error")
+                    }
+                }
+
+                Section("Transactions") {
+                    Toggle("Hide initial loads", isOn: $configuration.hideInitialLoads)
+                        .accessibilityIdentifier("activity.hideInitialLoads")
+                    Text("Uses each card’s earliest recorded credit. Press and hold a transaction to correct it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("History can be incomplete; hiding only filters Activity and does not delete transactions.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Cards") {
@@ -534,11 +666,15 @@ private struct ActivityFilterSheet: View {
                         let sort = configuration.sort
                         configuration = ActivityFilterConfiguration()
                         configuration.sort = sort
+                        minimumAmountText = ""
+                        maximumAmountText = ""
+                        amountError = nil
                     }
                     .frame(maxWidth: .infinity)
                     .accessibilityIdentifier("activity.filters.reset")
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Filters")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -547,8 +683,7 @@ private struct ActivityFilterSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Apply") {
-                        onApply(configuration)
-                        dismiss()
+                        applyFilters()
                     }
                     .fontWeight(.semibold)
                     .accessibilityIdentifier("activity.filters.apply")
@@ -557,6 +692,34 @@ private struct ActivityFilterSheet: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
+        .onChange(of: minimumAmountText) { _, _ in amountError = nil }
+        .onChange(of: maximumAmountText) { _, _ in amountError = nil }
+    }
+
+    private func applyFilters() {
+        do {
+            var updatedConfiguration = configuration
+            updatedConfiguration.amountRange = try TransactionAmountRange.parse(
+                minimum: minimumAmountText,
+                maximum: maximumAmountText,
+                locale: .current
+            )
+            onApply(updatedConfiguration)
+            dismiss()
+        } catch {
+            amountError = error.localizedDescription
+        }
+    }
+
+    private static func formatAmount(_ amount: Double?) -> String {
+        guard let amount else { return "" }
+        let formatter = NumberFormatter()
+        formatter.locale = .current
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = false
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 6
+        return formatter.string(from: NSNumber(value: amount)) ?? String(amount)
     }
 
     private func selectionRow(title: String, subtitle: String, isSelected: Bool) -> some View {

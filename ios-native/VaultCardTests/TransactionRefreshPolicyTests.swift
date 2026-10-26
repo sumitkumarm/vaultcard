@@ -148,3 +148,47 @@ final class TransactionDirectionAndAmountTests: XCTestCase {
         XCTAssertEqual(TransactionAppearance(amount: 20).formattedAmount, "+$20.00")
     }
 }
+
+final class TransactionAmountRangeTests: XCTestCase {
+    func testAmountRangeUsesInclusiveMagnitudesAndValidatesLocalizedInput() throws {
+        let us = Locale(identifier: "en_US")
+        let range = try TransactionAmountRange.parse(minimum: "20.50", maximum: "100", locale: us)
+        for value in [-100.0, -20.50, 20.50, 100] { XCTAssertTrue(range.includes(value)) }
+        for value in [-100.01, -20.49, 0, 100.01] { XCTAssertFalse(range.includes(value)) }
+        XCTAssertFalse(try TransactionAmountRange.parse(minimum: "", maximum: "", locale: us).isActive)
+        XCTAssertTrue(try TransactionAmountRange.parse(minimum: "", maximum: "100", locale: us).includes(-100))
+        XCTAssertTrue(try TransactionAmountRange.parse(minimum: "100", maximum: "", locale: us).includes(-200))
+        XCTAssertEqual(try TransactionAmountRange.parse(minimum: "1.234,50", maximum: "", locale: Locale(identifier: "de_DE")).minimum, 1234.5)
+        for (lower, upper) in [("-1", ""), ("12x", ""), ("1.234", ""), ("1,2,3", ""), ("101", "100")] {
+            XCTAssertThrowsError(try TransactionAmountRange.parse(minimum: lower, maximum: upper, locale: us))
+        }
+    }
+}
+
+@MainActor
+final class TransactionInitialLoadTests: XCTestCase {
+    func testEarliestRecordedCreditAndSavedCorrectionsDoNotReplaceAnotherCreditByAccident() throws {
+        let environment = try AppEnvironment.uiTesting()
+        let model = AppModel(environment: environment)
+        let cardID = try model.addCard(CardInput(cardNumber: "4111111111111111", expiry: "09/29", cvv: "123"))
+        let purchase = CardTransaction(id: "purchase", date: Date(timeIntervalSince1970: 0), description: "Purchase", amount: -100)
+        let load = CardTransaction(id: "load", date: Date(timeIntervalSince1970: 100), description: "Online", amount: 50)
+        let refund = CardTransaction(id: "refund", date: Date(timeIntervalSince1970: 200), description: "Refund", amount: 200)
+        try environment.cardRepository.applyBalanceResult(cardID: cardID, result: BalanceResult(balance: 150, transactions: [refund, purchase, load], fetchedAt: Date()))
+        model.reloadCards()
+        let card = try XCTUnwrap(model.cards.first)
+        XCTAssertEqual(TransactionInitialLoad.ids(for: card, overrides: [:]), ["load"])
+        model.setTransactionInitialLoad(cardID: cardID, transactionID: "refund", isInitialLoad: true)
+        let saved = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(environment.settingsRepository.load()))
+        XCTAssertEqual(TransactionInitialLoad.ids(for: card, overrides: saved.transactionInitialLoadOverrides), ["refund"])
+        model.setTransactionInitialLoad(cardID: cardID, transactionID: "refund", isInitialLoad: nil)
+        XCTAssertEqual(TransactionInitialLoad.ids(for: card, overrides: model.settings.transactionInitialLoadOverrides), ["load"])
+        model.setTransactionInitialLoad(cardID: cardID, transactionID: "load", isInitialLoad: false)
+        XCTAssertTrue(TransactionInitialLoad.ids(for: card, overrides: model.settings.transactionInitialLoadOverrides).isEmpty)
+        model.setTransactionInitialLoad(cardID: cardID, transactionID: "purchase", isInitialLoad: true)
+        XCTAssertNil(model.settings.transactionInitialLoadOverrides[TransactionInitialLoad.key(cardID: cardID, transactionID: "purchase")])
+        var anotherCard = card
+        anotherCard.id = "another-card"
+        XCTAssertEqual(TransactionInitialLoad.ids(for: anotherCard, overrides: model.settings.transactionInitialLoadOverrides), ["load"])
+    }
+}
