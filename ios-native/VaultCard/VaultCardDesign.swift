@@ -204,6 +204,8 @@ struct VaultCardArtwork: View {
     let card: VaultCard
     var compact = false
     var revealedCredentials: CardCredentials? = nil
+    var onCopyCardNumber: (() -> Void)? = nil
+    var isCardNumberCopied = false
     var usesDetailedMask = false
     var emphasizesEdge = false
 
@@ -244,11 +246,28 @@ struct VaultCardArtwork: View {
                     VaultNetworkMark(network: card.network)
                 }
                 Spacer(minLength: 0)
-                Text(
-                    revealedCredentials.map { CardRules.formatCardNumber($0.cardNumber) }
-                        ?? (usesDetailedMask ? CardRules.mask(last4: card.last4) : "••••  \(card.last4)")
-                )
-                    .font(.system(compact ? .caption : .body, design: .monospaced, weight: .medium))
+                HStack(spacing: 8) {
+                    cardNumberText(
+                        revealedCredentials.map { CardRules.formatCardNumber($0.cardNumber) }
+                            ?? (usesDetailedMask ? CardRules.mask(last4: card.last4) : "••••  \(card.last4)")
+                    )
+                    if revealedCredentials != nil, let onCopyCardNumber {
+                        Spacer(minLength: 8)
+                        Button(action: onCopyCardNumber) {
+                            Image(systemName: isCardNumberCopied ? "checkmark" : "doc.on.doc")
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isCardNumberCopied ? "Card number copied" : "Copy card number")
+                        .accessibilityIdentifier("detail.copyNumber")
+                        if isCardNumberCopied {
+                            Text("Copied")
+                                .font(.caption2.weight(.semibold))
+                        }
+                    }
+                }
                 HStack {
                     if !compact, let revealedCredentials {
                         HStack(spacing: 14) {
@@ -290,6 +309,25 @@ struct VaultCardArtwork: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .accessibilityIdentifier("detail.card.\(label.lowercased())")
+        }
+    }
+
+    @ViewBuilder
+    private func cardNumberText(_ value: String) -> some View {
+        if let onCopyCardNumber, revealedCredentials != nil {
+            Text(value)
+                .font(.system(compact ? .caption : .body, design: .monospaced, weight: .medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .accessibilityIdentifier("detail.card.number")
+                .contextMenu {
+                    Button("Copy Card Number", systemImage: "doc.on.doc", action: onCopyCardNumber)
+                }
+        } else {
+            Text(value)
+                .font(.system(compact ? .caption : .body, design: .monospaced, weight: .medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
     }
 }
