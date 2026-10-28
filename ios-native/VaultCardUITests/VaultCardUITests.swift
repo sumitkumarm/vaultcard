@@ -1,6 +1,30 @@
 import XCTest
 
 final class VaultCardUITests: XCTestCase {
+    func testRevealedCardNumberCopyActions() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards"]
+        app.launch()
+        openSeededCardForBalance(app)
+        let copyNumber = app.buttons["detail.copyNumber"]
+        XCTAssertFalse(copyNumber.exists)
+        app.buttons["detail.reveal"].tap()
+        XCTAssertTrue(copyNumber.waitForExistence(timeout: 5))
+        copyNumber.tap()
+        XCTAssertEqual(copyNumber.label, "Card number copied")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Revealed card number copy confirmation"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.staticTexts["detail.card.number"].press(forDuration: 1)
+        let copyMenu = app.buttons["Copy Card Number"]
+        XCTAssertTrue(copyMenu.waitForExistence(timeout: 3))
+        copyMenu.tap()
+        XCTAssertEqual(copyNumber.label, "Card number copied")
+        app.buttons["detail.reveal"].tap()
+        XCTAssertFalse(copyNumber.exists)
+    }
+
     func testManualCardLifecycleHappyPath() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]

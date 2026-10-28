@@ -6,6 +6,7 @@ import Observation
 import Security
 import SwiftData
 import SwiftUI
+import UIKit
 import UserNotifications
 import Vision
 import WebKit
@@ -4534,6 +4535,8 @@ struct CardDetailView: View {
     let cardID: String
     @State private var revealedCredentials: CardCredentials?
     @State private var hideTask: Task<Void, Never>?
+    @State private var copyFeedbackTask: Task<Void, Never>?
+    @State private var isCardNumberCopied = false
     @State private var confirmDelete = false
     @State private var showCVVEditor = false
     @State private var needsCVV = false
@@ -4607,6 +4610,8 @@ struct CardDetailView: View {
             VaultCardArtwork(
                 card: card,
                 revealedCredentials: revealedCredentials,
+                onCopyCardNumber: revealedCredentials == nil ? nil : { copyCardNumber() },
+                isCardNumberCopied: isCardNumberCopied,
                 usesDetailedMask: true
             )
             if needsCVV {
@@ -4761,13 +4766,36 @@ struct CardDetailView: View {
         hideTask = Task {
             try? await Task.sleep(for: .seconds(30))
             if !Task.isCancelled {
-                revealedCredentials = nil
+                clearReveal()
             }
+        }
+    }
+
+    private func copyCardNumber() {
+        guard let revealedCredentials else { return }
+        UIPasteboard.general.setItems(
+            [["public.utf8-plain-text": CardRules.digitsOnly(revealedCredentials.cardNumber)]],
+            options: [
+                .localOnly: true,
+                .expirationDate: Date().addingTimeInterval(120)
+            ]
+        )
+        copyFeedbackTask?.cancel()
+        isCardNumberCopied = true
+        copyFeedbackTask = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            isCardNumberCopied = false
+            copyFeedbackTask = nil
         }
     }
 
     private func clearReveal() {
         hideTask?.cancel()
+        hideTask = nil
+        copyFeedbackTask?.cancel()
+        copyFeedbackTask = nil
+        isCardNumberCopied = false
         revealedCredentials = nil
     }
 
