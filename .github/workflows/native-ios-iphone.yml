@@ -1,0 +1,75 @@
+name: Native iOS iPhone Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "ios-native/**"
+      - ".github/workflows/native-ios-iphone.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-iphone:
+    name: Build unsigned iPhone app
+    runs-on: macos-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build unsigned iOS app
+        run: |
+          xcodebuild \
+            -project ios-native/VaultCard.xcodeproj \
+            -scheme VaultCard \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/iphone \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' \
+            clean build
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="build/iphone/Build/Products/Release-iphoneos/VaultCard.app"
+          PACKAGE_PATH="build/iphone/package"
+          IPA_PATH="build/iphone/VaultCard-iphone-unsigned.ipa"
+
+          if [[ ! -d "${APP_PATH}" ]]; then
+            echo "Expected iPhone app was not produced at ${APP_PATH}" >&2
+            exit 1
+          fi
+
+          mkdir -p "${PACKAGE_PATH}/Payload"
+          ditto "${APP_PATH}" "${PACKAGE_PATH}/Payload/VaultCard.app"
+          ditto -c -k --sequesterRsrc --keepParent "${PACKAGE_PATH}/Payload" "${IPA_PATH}"
+
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VaultCard-iphone-unsigned
+          path: build/iphone/VaultCard-iphone-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Build summary
+        run: |
+          {
+            echo "## Unsigned iPhone build"
+            echo ""
+            echo "- Artifact: VaultCard-iphone-unsigned"
+            echo "- This IPA is unsigned and is not directly installable. Re-sign it with AltStore or another iOS signing tool."
+            echo "- See [docs/iphone-testing-without-mac.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/iphone-testing-without-mac.md) for setup steps."
+          } >> "$GITHUB_STEP_SUMMARY"
