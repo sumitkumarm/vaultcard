@@ -32,6 +32,8 @@ final class VaultFundsSummaryTests: XCTestCase {
         XCTAssertEqual(summary.staleBalanceCount, 1)
         XCTAssertEqual(summary.totalLabel, "Known unused funds")
         XCTAssertEqual(summary.coverageText, "1 card needs a balance check · 1 balance needs refresh")
+        let lenient = VaultFundsSummary(cards: [card("stale", balance: 3.50, fetchedAt: staleDate)], now: now, refreshAfterDays: 14)
+        XCTAssertEqual(lenient.staleBalanceCount, 0)
 
         let allUnknown = VaultFundsSummary(cards: [card("unknown", balance: nil, fetchedAt: nil)], now: now)
         XCTAssertNil(allUnknown.total)

@@ -37,17 +37,20 @@ enum CardNotificationPlanner {
         calendar: Calendar
     ) -> [PlannedCardNotification] {
         guard preferences.expiryWarning else { return [] }
-        return cards.filter { !$0.isArchived }.flatMap { card in
-            [30, 7].compactMap { days -> PlannedCardNotification? in
-                guard let date = expiryReminderDate(expiry: card.expiry, daysBeforeEnd: days, calendar: calendar),
-                      date > now else { return nil }
-                return PlannedCardNotification(
-                    identifier: expiryIdentifier(cardID: card.id, days: days),
-                    cardID: card.id,
-                    fireDate: date,
-                    kind: .expiry(daysBeforeEnd: days)
-                )
-            }
+        let days = preferences.expiryWarningDays
+        return cards.compactMap { card in
+            guard !card.isArchived,
+                  let balance = card.balance,
+                  balance.isFinite,
+                  balance > 0,
+                  let date = expiryReminderDate(expiry: card.expiry, daysBeforeEnd: days, calendar: calendar),
+                  date > now else { return nil }
+            return PlannedCardNotification(
+                identifier: expiryIdentifier(cardID: card.id, days: days),
+                cardID: card.id,
+                fireDate: date,
+                kind: .expiry(daysBeforeEnd: days)
+            )
         }
     }
 
@@ -263,10 +266,13 @@ final class NotificationService: NSObject, NotificationScheduling, UNUserNotific
             await removeRequests(identifiers: [CardNotificationPlanner.useReminderIdentifier(cardID: card.id)])
         }
 
-        await removeRequests(identifiers: legacyIdentifiers(for: card.id) + [
-            CardNotificationPlanner.expiryIdentifier(cardID: card.id, days: 30),
-            CardNotificationPlanner.expiryIdentifier(cardID: card.id, days: 7)
-        ])
+        let pendingRequests = await center.pendingNotificationRequests()
+        let deliveredNotifications = await center.deliveredNotifications()
+        let expiryIDs = Self.expiryRequestIdentifiers(
+            for: card.id,
+            identifiers: pendingRequests.map(\.identifier) + deliveredNotifications.map { $0.request.identifier }
+        )
+        await removeRequests(identifiers: legacyIdentifiers(for: card.id) + expiryIDs)
         let expiryPlans = CardNotificationPlanner.expiryNotifications(
             for: [card], preferences: preferences, now: now(), calendar: calendar
         )
@@ -282,7 +288,9 @@ final class NotificationService: NSObject, NotificationScheduling, UNUserNotific
         revision += 1
         let currentRevision = revision
         privacyPreservingContent = preferences.privacyPreservingContent
-        if preferences.expiryWarning && cards.contains(where: { !$0.isArchived }) {
+        if !CardNotificationPlanner.expiryNotifications(
+            for: cards, preferences: preferences, now: now(), calendar: calendar
+        ).isEmpty {
             let settings = await center.notificationSettings()
             if settings.authorizationStatus == .notDetermined { await requestAuthorization() }
             guard currentRevision == revision, !Task.isCancelled else { return }
@@ -433,8 +441,8 @@ final class NotificationService: NSObject, NotificationScheduling, UNUserNotific
         let content = UNMutableNotificationContent()
         content.title = "Card expiry reminder"
         content.body = privacyPreserving
-            ? "Open VaultCard to review a card approaching expiry."
-            : "\(card.displayName) expires in about \(days) days."
+            ? "Review the card’s last-known balance and expiry date in VaultCard."
+            : "\(card.displayName) had an unused balance of \(Self.currencyString(card.balance ?? 0)) last checked \(card.lastFetchedAt.map(Self.dateString) ?? "recently"); it expires in about \(days) days."
         content.sound = .default
         content.userInfo = ["cardID": card.id]
         let trigger = UNCalendarNotificationTrigger(
@@ -483,9 +491,7 @@ final class NotificationService: NSObject, NotificationScheduling, UNUserNotific
         var pending = await center.pendingNotificationRequests().filter { Self.isOwnedRequestIdentifier($0.identifier) }
         guard !pending.contains(where: { $0.identifier == existingID }) else { return }
         while pending.count >= CardNotificationPlanner.pendingRequestLimit {
-            let expiryRequests = pending.filter {
-                $0.identifier.hasSuffix(".expiry.30") || $0.identifier.hasSuffix(".expiry.7")
-            }
+            let expiryRequests = pending.filter { Self.isExpiryRequestIdentifier($0.identifier) }
             guard let farthestExpiry = expiryRequests.max(by: {
                 (($0.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate() ?? .distantFuture) < (($1.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate() ?? .distantFuture)
             }) else {
@@ -497,15 +503,29 @@ final class NotificationService: NSObject, NotificationScheduling, UNUserNotific
     }
 
     private func legacyIdentifiers(for cardID: String) -> [String] {
-        ["\(cardID).low", "\(cardID).refreshFailed", "\(cardID).expiry.30", "\(cardID).expiry.7"]
+        ["\(cardID).low", "\(cardID).refreshFailed"]
+    }
+
+    private static func expiryRequestIdentifiers(for cardID: String, identifiers: [String]) -> [String] {
+        let currentPrefix = "vaultcard.notification.\(cardID).expiry."
+        let legacyPrefix = "\(cardID).expiry."
+        return identifiers.filter { identifier in
+            (identifier.hasPrefix(currentPrefix) || identifier.hasPrefix(legacyPrefix))
+                && isExpiryRequestIdentifier(identifier)
+        }
+    }
+
+    private static func isExpiryRequestIdentifier(_ identifier: String) -> Bool {
+        guard let marker = identifier.range(of: ".expiry.", options: .backwards) else { return false }
+        let day = identifier[marker.upperBound...]
+        return !day.isEmpty && day.allSatisfy(\.isNumber)
     }
 
     private static func isOwnedRequestIdentifier(_ identifier: String) -> Bool {
         identifier.hasPrefix("vaultcard.notification.")
             || identifier.hasSuffix(".low")
             || identifier.hasSuffix(".refreshFailed")
-            || identifier.hasSuffix(".expiry.30")
-            || identifier.hasSuffix(".expiry.7")
+            || isExpiryRequestIdentifier(identifier)
     }
 
     private static func makeReminderCategory() -> UNNotificationCategory {

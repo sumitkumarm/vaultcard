@@ -13,8 +13,7 @@ final class CardNotificationServiceTests: XCTestCase {
             calendar: calendar
         )
         XCTAssertEqual(januaryPlans.map(\.fireDate), [
-            date(2026, 1, 1, hour: 9, calendar: calendar),
-            date(2026, 1, 24, hour: 9, calendar: calendar)
+            date(2026, 1, 1, hour: 9, calendar: calendar)
         ])
 
         let decemberPlans = CardNotificationPlanner.expiryNotifications(
@@ -24,9 +23,36 @@ final class CardNotificationServiceTests: XCTestCase {
             calendar: calendar
         )
         XCTAssertEqual(decemberPlans.map(\.fireDate), [
-            date(2025, 12, 1, hour: 9, calendar: calendar),
-            date(2025, 12, 24, hour: 9, calendar: calendar)
+            date(2025, 12, 1, hour: 9, calendar: calendar)
         ])
+    }
+
+    func testExpiryPlansUseConfiguredLeadDayAndRequireKnownPositiveBalance() {
+        let calendar = utcCalendar()
+        let now = date(2025, 1, 1, calendar: calendar)
+        let valid = card(id: "valid", expiry: "01/26", balance: 2.5)
+        let invalidCards = [
+            card(id: "unknown", expiry: "01/26", balance: nil),
+            card(id: "zero", expiry: "01/26", balance: 0),
+            card(id: "negative", expiry: "01/26", balance: -1),
+            card(id: "nan", expiry: "01/26", balance: .nan),
+            card(id: "infinite", expiry: "01/26", balance: .infinity)
+        ]
+        var archived = card(id: "archived", expiry: "01/26", balance: 1)
+        archived.archivedAt = now
+
+        let plans = CardNotificationPlanner.expiryNotifications(
+            for: [valid] + invalidCards + [archived],
+            preferences: NotificationPreferences(expiryWarningDays: 14),
+            now: now,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(plans.count, 1)
+        XCTAssertEqual(plans.first?.cardID, "valid")
+        XCTAssertEqual(plans.first?.kind, .expiry(daysBeforeEnd: 14))
+        XCTAssertEqual(plans.first?.identifier, CardNotificationPlanner.expiryIdentifier(cardID: "valid", days: 14))
+        XCTAssertEqual(plans.first?.fireDate, date(2026, 1, 17, hour: 9, calendar: calendar))
     }
 
     func testExpiryPlansRespectPreferenceArchivedCardsAndPastDates() {
@@ -52,7 +78,7 @@ final class CardNotificationServiceTests: XCTestCase {
             calendar: calendar
         )
         XCTAssertTrue(plans.allSatisfy { $0.cardID == "active" })
-        XCTAssertEqual(plans.map(\.kind), [.expiry(daysBeforeEnd: 30), .expiry(daysBeforeEnd: 7)])
+        XCTAssertEqual(plans.map(\.kind), [.expiry(daysBeforeEnd: 30)])
     }
 
     func testUseReminderRequiresFutureDateAndKnownFinitePositiveLowBalance() {
@@ -141,7 +167,7 @@ final class CardNotificationServiceTests: XCTestCase {
     func testPendingLimitPrioritizesUserRemindersThenNearestExpiry() throws {
         let calendar = utcCalendar()
         let now = date(2025, 1, 1, calendar: calendar)
-        let cards = (0..<34).map { index in
+        let cards = (0..<70).map { index in
             card(id: String(format: "%02d", index), expiry: "09/29", balance: 5, fetchedAt: now)
         }
         let reminders = Dictionary(uniqueKeysWithValues: (0..<2).map { index in
@@ -174,6 +200,7 @@ final class CardNotificationServiceTests: XCTestCase {
         let json = Data(#"{"analyticsEnabled":true,"notificationPreferences":{"expiryWarning":false,"lowBalance":true,"refreshFailed":true,"balanceUpdated":true}}"#.utf8)
         let settings = try JSONDecoder().decode(AppSettings.self, from: json)
         XCTAssertFalse(settings.notificationPreferences.expiryWarning)
+        XCTAssertEqual(settings.notificationPreferences.expiryWarningDays, 30)
         XCTAssertTrue(settings.notificationPreferences.privacyPreservingContent)
         let encoded = String(decoding: try JSONEncoder().encode(settings), as: UTF8.self)
         for obsolete in ["analyticsEnabled", "lowBalance", "refreshFailed", "balanceUpdated"] {
