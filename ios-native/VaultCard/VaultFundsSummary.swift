@@ -7,7 +7,7 @@ struct VaultFundsSummary {
     let unknownBalanceCount: Int
     let staleBalanceCount: Int
 
-    init(cards: [VaultCard], now: Date = Date()) {
+    init(cards: [VaultCard], now: Date = Date(), refreshAfterDays: Int = 7) {
         let activeCards = cards.filter { !$0.isArchived }
         activeCardCount = activeCards.count
 
@@ -28,7 +28,7 @@ struct VaultFundsSummary {
             NSDecimalRound(&roundedAmount, &sourceAmount, 2, .plain)
             knownTotal += roundedAmount
             knownCount += 1
-            if card.balanceFreshness(at: now) == .needsRefresh {
+            if card.balanceFreshness(at: now, refreshAfterDays: refreshAfterDays) == .needsRefresh {
                 staleCount += 1
             }
         }
@@ -66,8 +66,11 @@ struct VaultFundsSummary {
 struct VaultFundsSummaryView: View {
     let cards: [VaultCard]
     var now: Date = Date()
+    var refreshAfterDays = 7
 
-    private var summary: VaultFundsSummary { VaultFundsSummary(cards: cards, now: now) }
+    private var summary: VaultFundsSummary {
+        VaultFundsSummary(cards: cards, now: now, refreshAfterDays: refreshAfterDays)
+    }
 
     var body: some View {
         VaultSurface(cornerRadius: 18, padding: 13) {

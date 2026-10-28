@@ -18,7 +18,29 @@ final class VaultCardTests: XCTestCase {
         XCTAssertEqual(neverUpdated.balanceFreshness(at: now), .needsRefresh)
         XCTAssertEqual(failed.balanceFreshness(at: now), .needsRefresh)
         XCTAssertEqual(stale.balanceFreshness(at: now), .needsRefresh)
+        let boundary = freshnessCard(lastFetchedAt: now.addingTimeInterval(-7 * 86_400), failureCount: 0)
+        XCTAssertEqual(boundary.balanceFreshness(at: now), .needsRefresh)
+        XCTAssertEqual(boundary.balanceFreshness(at: now.addingTimeInterval(-1)), .upToDate)
+        XCTAssertEqual(boundary.balanceFreshness(at: now, refreshAfterDays: 14), .upToDate)
+        XCTAssertEqual(recentlyUpdated.balanceFreshness(at: now, refreshAfterDays: 1), .upToDate)
+        XCTAssertEqual(failed.balanceFreshness(at: now, refreshAfterDays: 365), .needsRefresh)
 
+    }
+
+    func testTimingSettingsMigrateAndPersistConfiguredValues() throws {
+        let legacy = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        XCTAssertEqual(legacy.refreshAfterDays, 7)
+        XCTAssertEqual(legacy.notificationPreferences.expiryWarningDays, 30)
+        XCTAssertTrue(legacy.notificationPreferences.expiryWarning)
+        var configured = legacy
+        configured.refreshAfterDays = 14
+        configured.notificationPreferences.expiryWarningDays = 45
+        configured.notificationPreferences.expiryWarning = false
+        let restored = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(configured))
+        XCTAssertEqual(restored, configured)
+        let outOfRange = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"refreshAfterDays":0,"notificationPreferences":{"expiryWarningDays":999}}"#.utf8))
+        XCTAssertEqual(outOfRange.refreshAfterDays, 1)
+        XCTAssertEqual(outOfRange.notificationPreferences.expiryWarningDays, 365)
     }
 
     func testCardValidationAndNetworkInference() {

@@ -68,7 +68,7 @@ struct VaultCard: Identifiable, Equatable {
         case needsRefresh
     }
 
-    static let balanceFreshnessInterval: TimeInterval = 24 * 60 * 60
+    static let balanceFreshnessInterval: TimeInterval = 7 * 24 * 60 * 60
 
     var id: String
     var nickname: String?
@@ -121,9 +121,11 @@ struct VaultCard: Identifiable, Equatable {
 
     var isArchived: Bool { archivedAt != nil }
 
-    func balanceFreshness(at date: Date = Date()) -> BalanceFreshness {
+    func balanceFreshness(at date: Date = Date(), refreshAfterDays: Int = 7) -> BalanceFreshness {
         guard fetchFailureCount == 0, let lastFetchedAt else { return .needsRefresh }
-        return date.timeIntervalSince(lastFetchedAt) <= Self.balanceFreshnessInterval
+        let boundedDays = min(max(refreshAfterDays, 1), 365)
+        let freshnessInterval = TimeInterval(boundedDays) * 24 * 60 * 60
+        return date.timeIntervalSince(lastFetchedAt) < freshnessInterval
             ? .upToDate
             : .needsRefresh
     }
@@ -163,16 +165,21 @@ struct CardInput: Equatable {
 
 struct NotificationPreferences: Codable, Equatable {
     var expiryWarning = true
+    var expiryWarningDays = 30 {
+        didSet { expiryWarningDays = min(max(expiryWarningDays, 1), 365) }
+    }
     var privacyPreservingContent = true
 
-    init(expiryWarning: Bool = true, privacyPreservingContent: Bool = true) {
+    init(expiryWarning: Bool = true, expiryWarningDays: Int = 30, privacyPreservingContent: Bool = true) {
         self.expiryWarning = expiryWarning
+        self.expiryWarningDays = min(max(expiryWarningDays, 1), 365)
         self.privacyPreservingContent = privacyPreservingContent
     }
-    private enum CodingKeys: String, CodingKey { case expiryWarning, privacyPreservingContent }
+    private enum CodingKeys: String, CodingKey { case expiryWarning, expiryWarningDays, privacyPreservingContent }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         expiryWarning = try values.decodeIfPresent(Bool.self, forKey: .expiryWarning) ?? true
+        expiryWarningDays = min(max(try values.decodeIfPresent(Int.self, forKey: .expiryWarningDays) ?? 30, 1), 365)
         privacyPreservingContent = try values.decodeIfPresent(Bool.self, forKey: .privacyPreservingContent) ?? true
     }
 }
@@ -182,6 +189,9 @@ struct AppSettings: Codable, Equatable {
     var appLockEnabled = false
     var sortOption = CardSortOption.dateAddedNewest
     var notificationPreferences = NotificationPreferences()
+    var refreshAfterDays = 7 {
+        didSet { refreshAfterDays = min(max(refreshAfterDays, 1), 365) }
+    }
     var addCardPreference = AddCardPreference.scan
     var hasSeenSwipeArchiveConfirmation = false
     var archiveZeroBalanceCardsAutomatically = true
@@ -194,6 +204,7 @@ struct AppSettings: Codable, Equatable {
         case appLockEnabled
         case sortOption
         case notificationPreferences
+        case refreshAfterDays
         case addCardPreference
         case hasSeenSwipeArchiveConfirmation
         case archiveZeroBalanceCardsAutomatically
@@ -210,6 +221,7 @@ struct AppSettings: Codable, Equatable {
         appLockEnabled = try values.decodeIfPresent(Bool.self, forKey: .appLockEnabled) ?? false
         sortOption = try values.decodeIfPresent(CardSortOption.self, forKey: .sortOption) ?? .dateAddedNewest
         notificationPreferences = try values.decodeIfPresent(NotificationPreferences.self, forKey: .notificationPreferences) ?? NotificationPreferences()
+        refreshAfterDays = min(max(try values.decodeIfPresent(Int.self, forKey: .refreshAfterDays) ?? 7, 1), 365)
         addCardPreference = try values.decodeIfPresent(AddCardPreference.self, forKey: .addCardPreference) ?? .scan
         hasSeenSwipeArchiveConfirmation = try values.decodeIfPresent(Bool.self, forKey: .hasSeenSwipeArchiveConfirmation) ?? false
         archiveZeroBalanceCardsAutomatically = try values.decodeIfPresent(Bool.self, forKey: .archiveZeroBalanceCardsAutomatically) ?? true
@@ -2666,9 +2678,13 @@ struct CardListView: View {
         case .all:
             filtered = model.sortedActiveCards
         case .upToDate:
-            filtered = model.sortedActiveCards.filter { $0.balanceFreshness() == .upToDate }
+            filtered = model.sortedActiveCards.filter {
+                $0.balanceFreshness(refreshAfterDays: model.settings.refreshAfterDays) == .upToDate
+            }
         case .needsRefresh:
-            filtered = model.sortedActiveCards.filter { $0.balanceFreshness() == .needsRefresh }
+            filtered = model.sortedActiveCards.filter {
+                $0.balanceFreshness(refreshAfterDays: model.settings.refreshAfterDays) == .needsRefresh
+            }
         case .zeroBalance:
             filtered = model.sortedActiveCards.filter { $0.balance?.isFinite == true && $0.balance == 0 }
         }
@@ -2685,7 +2701,7 @@ struct CardListView: View {
         ZStack {
             VaultBackground()
             List {
-                VaultFundsSummaryView(cards: model.cards)
+                VaultFundsSummaryView(cards: model.cards, refreshAfterDays: model.settings.refreshAfterDays)
                     .cardListRowStyle(verticalPadding: 8)
                 searchRow
                 filterRow
@@ -2868,7 +2884,9 @@ struct CardListView: View {
     private var filterRow: some View {
         let cards = model.sortedActiveCards
         let now = Date()
-        let upToDateCount = cards.reduce(0) { $0 + ($1.balanceFreshness(at: now) == .upToDate ? 1 : 0) }
+        let upToDateCount = cards.reduce(0) {
+            $0 + ($1.balanceFreshness(at: now, refreshAfterDays: model.settings.refreshAfterDays) == .upToDate ? 1 : 0)
+        }
         let zeroBalanceCount = model.knownZeroBalanceActiveCardIDs.count
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -3008,7 +3026,7 @@ struct CardListView: View {
 
         if visibleCards.count == 1, let card = visibleCards.first {
             Button { model.routePath.append(.detail(card.id)) } label: {
-                VaultCardArtwork(card: card)
+                VaultCardArtwork(card: card, refreshAfterDays: model.settings.refreshAfterDays)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("card.row.\(card.last4)")
@@ -3023,7 +3041,7 @@ struct CardListView: View {
         } else if isStackExpanded {
             ForEach(visibleCards) { card in
                 Button { model.routePath.append(.detail(card.id)) } label: {
-                    VaultCardArtwork(card: card)
+                    VaultCardArtwork(card: card, refreshAfterDays: model.settings.refreshAfterDays)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("card.row.\(card.last4)")
@@ -3043,7 +3061,7 @@ struct CardListView: View {
                     isStackExpanded = true
                 }
             } label: {
-                VaultCardStackView(cards: visibleCards)
+                VaultCardStackView(cards: visibleCards, refreshAfterDays: model.settings.refreshAfterDays)
             }
             .accessibilityIdentifier("cards.stack.expand")
             .accessibilityLabel("Expand \(visibleCards.count) cards")
@@ -3669,6 +3687,7 @@ struct ArchivedCardsView: View {
 
 struct VaultCardStackView: View {
     let cards: [VaultCard]
+    var refreshAfterDays = 7
 
     var body: some View {
         let stackedCards = Array(cards.prefix(4))
@@ -3677,7 +3696,7 @@ struct VaultCardStackView: View {
         let stackHeight = lastIndex * 28 + lastCardHeight + 12
         ZStack(alignment: .top) {
             ForEach(Array(stackedCards.enumerated()).reversed(), id: \.element.id) { index, card in
-                VaultCardArtwork(card: card, emphasizesEdge: index > 0)
+                VaultCardArtwork(card: card, refreshAfterDays: refreshAfterDays, emphasizesEdge: index > 0)
                     .scaleEffect(1 - CGFloat(index) * 0.032, anchor: .top)
                     .offset(y: CGFloat(index) * 28)
                     .zIndex(Double(stackedCards.count - index))
@@ -4609,6 +4628,7 @@ struct CardDetailView: View {
         VStack(alignment: .leading, spacing: 16) {
             VaultCardArtwork(
                 card: card,
+                refreshAfterDays: model.settings.refreshAfterDays,
                 revealedCredentials: revealedCredentials,
                 onCopyCardNumber: revealedCredentials == nil ? nil : { copyCardNumber() },
                 isCardNumberCopied: isCardNumberCopied,
@@ -5515,6 +5535,21 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Section("Balances") {
+                    HStack(spacing: 5) {
+                        Text("Needs refresh after")
+                        Spacer(minLength: 4)
+                        TextField("7", value: refreshAfterDaysBinding, format: .number)
+                            .frame(width: 42)
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.numberPad)
+                            .accessibilityLabel("Needs refresh after days")
+                            .accessibilityIdentifier("settings.refreshAfterDays")
+                        Text("days")
+                        Stepper("", value: refreshAfterDaysBinding, in: 1...365)
+                            .labelsHidden()
+                            .accessibilityLabel("Adjust refresh interval")
+                            .accessibilityIdentifier("settings.refreshAfterDays.stepper")
+                    }
                     Toggle(isOn: Binding(
                         get: { model.settings.archiveZeroBalanceCardsAutomatically },
                         set: { value in model.updateSettings { $0.archiveZeroBalanceCardsAutomatically = value } }
@@ -5551,12 +5586,29 @@ struct SettingsView: View {
                         model.updateSettings { $0.notificationPreferences.expiryWarning = value }
                         if value { Task { await model.requestNotificationAuthorization() } }
                     })) {
-                        Label("Expiry warnings", systemImage: "calendar.badge.exclamationmark")
+                        Label("Unused balance expiry reminder", systemImage: "calendar.badge.exclamationmark")
                     }
                     .accessibilityIdentifier("settings.expiryWarnings")
-                    Text("Reminders 30 and 7 days before an active card expires. No balance refresh is needed.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if model.settings.notificationPreferences.expiryWarning {
+                        HStack(spacing: 5) {
+                            Text("Reminder lead time")
+                            Spacer(minLength: 4)
+                            TextField("30", value: expiryWarningDaysBinding, format: .number)
+                                .frame(width: 42)
+                                .multilineTextAlignment(.trailing)
+                                .keyboardType(.numberPad)
+                                .accessibilityLabel("Expiry reminder days")
+                                .accessibilityIdentifier("settings.expiryWarningDays")
+                            Text("days")
+                            Stepper("", value: expiryWarningDaysBinding, in: 1...365)
+                                .labelsHidden()
+                                .accessibilityLabel("Adjust expiry reminder lead time")
+                                .accessibilityIdentifier("settings.expiryWarningDays.stepper")
+                        }
+                        Text("Reminds you when a card has a last-known positive balance before it expires at the end of its expiry month.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     Text("For a saved balance below $10, open the card and choose ‘Remind me to use this’ to set a one-time reminder.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -5613,6 +5665,7 @@ struct SettingsView: View {
                     LabeledContent("Version", value: "1.0")
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .scrollContentBackground(.hidden)
             .vaultFloatingBarScrollClearance()
         }
@@ -5620,6 +5673,20 @@ struct SettingsView: View {
         .onAppear {
             selectedAppIconName = UIApplication.shared.alternateIconName
         }
+    }
+
+    private var expiryWarningDaysBinding: Binding<Int> {
+        Binding(
+            get: { model.settings.notificationPreferences.expiryWarningDays },
+            set: { value in model.updateSettings { $0.notificationPreferences.expiryWarningDays = value } }
+        )
+    }
+
+    private var refreshAfterDaysBinding: Binding<Int> {
+        Binding(
+            get: { model.settings.refreshAfterDays },
+            set: { value in model.updateSettings { $0.refreshAfterDays = value } }
+        )
     }
 }
 

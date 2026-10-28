@@ -202,12 +202,17 @@ struct VaultNetworkRowIcon: View {
 
 struct VaultCardArtwork: View {
     let card: VaultCard
+    var refreshAfterDays = 7
     var compact = false
     var revealedCredentials: CardCredentials? = nil
     var onCopyCardNumber: (() -> Void)? = nil
     var isCardNumberCopied = false
     var usesDetailedMask = false
     var emphasizesEdge = false
+
+    private var freshness: VaultCard.BalanceFreshness {
+        card.balanceFreshness(refreshAfterDays: refreshAfterDays)
+    }
 
     private var gradient: [Color] {
         let palette: [[Color]] = [
@@ -280,9 +285,9 @@ struct VaultCardArtwork: View {
                             .font(.title3.weight(.semibold))
                     }
                     Spacer()
-                    Text(card.balanceFreshness() == .upToDate ? "Up to date" : "Needs refresh")
+                    Text(freshness == .upToDate ? "Up to date" : "Needs refresh")
                         .font(.caption2.weight(.bold))
-                        .foregroundStyle(card.balanceFreshness() == .upToDate ? VaultTheme.success : VaultTheme.warning)
+                        .foregroundStyle(freshness == .upToDate ? VaultTheme.success : VaultTheme.warning)
                         .padding(.horizontal, 9)
                         .padding(.vertical, 5)
                         .background(.black.opacity(0.2), in: Capsule())

@@ -699,7 +699,21 @@ final class VaultCardUITests: XCTestCase {
         app.launchArguments = ["--ui-testing", "--ui-testing-seed-cards"]
         app.launch()
         app.buttons["tray.settings"].tap()
+        let refreshDays = app.textFields["settings.refreshAfterDays"]
+        XCTAssertTrue(refreshDays.waitForExistence(timeout: 5))
+        XCTAssertEqual(refreshDays.value as? String, "7")
+        app.buttons["settings.refreshAfterDays.stepper-Increment"].tap()
+        XCTAssertEqual(refreshDays.value as? String, "8")
+        let expiryDays = app.textFields["settings.expiryWarningDays"]
+        for _ in 0..<4 {
+            if expiryDays.exists && expiryDays.isHittable { break }
+            app.swipeUp()
+        }
         XCTAssertTrue(app.switches["settings.expiryWarnings"].waitForExistence(timeout: 5))
+        XCTAssertTrue(expiryDays.waitForExistence(timeout: 5))
+        XCTAssertEqual(expiryDays.value as? String, "30")
+        app.buttons["settings.expiryWarningDays.stepper-Increment"].tap()
+        XCTAssertEqual(expiryDays.value as? String, "31")
         for obsolete in ["Balance updated", "Refresh failed", "Low balance", "Private Analytics"] {
             XCTAssertFalse(app.switches[obsolete].exists)
         }
