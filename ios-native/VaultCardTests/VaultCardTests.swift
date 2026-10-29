@@ -465,7 +465,7 @@ final class VaultCardTests: XCTestCase {
         XCTAssertEqual(Set(store.records.keys), [survivorID])
     }
 
-    func testGiftCardMallBridgeRejectsUntrustedHostAndParsesFixture() throws {
+    func testGiftCardMallBridgeDoesNotSaveAPIClosingBalance() throws {
         let trustedURL = URL(string: "https://www.mycardwallet.com/chs/mygift/")!
         let untrustedURL = URL(string: "https://example.com/")!
         let message: [String: Any] = [
@@ -479,9 +479,7 @@ final class VaultCardTests: XCTestCase {
             "status": 200
         ]
         XCTAssertNil(try GiftCardMallBridge.parseSummary(message, sourceURL: untrustedURL))
-        let summary = try XCTUnwrap(GiftCardMallBridge.parseSummary(message, sourceURL: trustedURL))
-        XCTAssertEqual(summary.balance, 42.5)
-        XCTAssertEqual(summary.currencyCode, "USD")
+        XCTAssertNil(try GiftCardMallBridge.parseSummary(message, sourceURL: trustedURL))
     }
 
     func testBalancePortalRoutesMatchCardNetwork() {
@@ -554,12 +552,17 @@ final class VaultCardTests: XCTestCase {
             "namespace": GiftCardMallBridge.handlerName,
             "parserVersion": GiftCardMallBridge.parserVersion,
             "kind": "domBalance",
+            "source": "availableBalanceSummary",
             "pageHost": "mygift.giftcardmall.com",
-            "balance": 27.45
+            "balance": 23.56
         ]
 
         let summary = try XCTUnwrap(GiftCardMallBridge.parseSummary(message, sourceURL: trustedURL))
-        XCTAssertEqual(summary.balance, 27.45)
+        XCTAssertEqual(summary.balance, 23.56)
+        var unlabelled = message
+        unlabelled.removeValue(forKey: "source")
+        XCTAssertNil(try GiftCardMallBridge.parseSummary(unlabelled, sourceURL: trustedURL))
+        XCTAssertNil(try GiftCardMallBridge.parseSummary(message, sourceURL: URL(string: "https://example.com/")!))
     }
 
     func testGiftCardMallTransactionParserHandlesNestedSearchResults() throws {

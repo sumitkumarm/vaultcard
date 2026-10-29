@@ -1058,20 +1058,21 @@ enum GiftCardMallBridge {
 
           let lastDOMBalance = null;
           const inspectBalance = () => {
-            const selectors = [
-              '.balance-amount',
-              '[data-testid*="balance"]',
-              '[class*="balanceAmount"]',
-              '[class*="balance-amount"]'
-            ];
-            for (const selector of selectors) {
-              for (const element of document.querySelectorAll(selector)) {
-                const match = (element.textContent || '').replace(/,/g, '').match(/\\$\\s*([0-9]+(?:\\.[0-9]{1,2})?)/);
+            // Read the labeled summary even when it is scrolled offscreen.
+            // Historical transaction balances and initial balances are never current funds.
+            const normalize = element => (element.textContent || '').replace(/\\s+/g, ' ').trim();
+            for (const label of document.querySelectorAll('body *')) {
+              if (!/^available\\s+balance(?:\\s|:|\\$|$)/i.test(normalize(label))) { continue; }
+              if (!label.getClientRects().length || label.closest('table, [role="grid"], [role="row"]')) { continue; }
+              let element = label;
+              for (let depth = 0; element && depth < 4; depth++, element = element.parentElement) {
+                const match = normalize(element).replace(/,/g, '').match(/^available\\s+balance\\s*:?\\s*\\$\\s*([0-9]+(?:\\.[0-9]{1,2})?)$/i);
                 if (!match) { continue; }
                 const balance = Number(match[1]);
-                if (!Number.isFinite(balance) || balance < 0 || balance === lastDOMBalance) { continue; }
+                if (!Number.isFinite(balance) || balance < 0) { return; }
+                if (balance === lastDOMBalance) { return; }
                 lastDOMBalance = balance;
-                post({ kind: 'domBalance', balance });
+                post({ kind: 'domBalance', source: 'availableBalanceSummary', balance });
                 return;
               }
             }
@@ -1346,8 +1347,9 @@ enum GiftCardMallBridge {
               pageHost.caseInsensitiveCompare(sourceURL?.host ?? "") == .orderedSame
         else { return nil }
 
-        if payload["kind"] as? String == "domBalance" {
-            guard let balance = (payload["balance"] as? NSNumber)?.doubleValue, balance >= 0 else {
+        if payload["kind"] as? String == "domBalance",
+           payload["source"] as? String == "availableBalanceSummary" {
+            guard let balance = (payload["balance"] as? NSNumber)?.doubleValue, balance.isFinite, balance >= 0 else {
                 throw VaultError.webBridge("Invalid balance value.")
             }
             return GiftCardMallSummaryCapture(
@@ -1358,28 +1360,8 @@ enum GiftCardMallBridge {
             )
         }
 
-        guard payload["kind"] as? String == "networkCapture",
-              let url = payload["url"] as? String,
-              url.contains("/api/card/getCardBalanceSummary"),
-              let responseBody = payload["responseBody"] as? String,
-              let data = responseBody.data(using: .utf8),
-              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              json["success"] as? Bool == true,
-              let result = json["result"] as? [String: Any],
-              let balances = result["balances"] as? [String: Any]
-        else { return nil }
-        let requestBody = (payload["requestBody"] as? String)?.data(using: .utf8)
-        let request = requestBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-        guard let balance = (balances["closingBalance"] as? NSNumber)?.doubleValue else {
-            throw VaultError.webBridge("GiftCardMall returned a balance response without a balance value.")
-        }
-        guard balance >= 0 else { throw VaultError.webBridge("Invalid balance value.") }
-        return GiftCardMallSummaryCapture(
-            balance: balance,
-            currencyCode: (balances["currencyCode"] as? String).flatMap { $0.range(of: #"^[A-Z]{3}$"#, options: .regularExpression) == nil ? nil : $0 } ?? "USD",
-            accessToken: json["access_token"] as? String ?? "",
-            rmsSessionId: request?["rmsSessionId"] as? String ?? ""
-        )
+        // The rendered Available Balance is the source of truth, not closingBalance.
+        return nil
     }
 
     static func parseTransactions(_ body: Any, sourceURL: URL?, summary: GiftCardMallSummaryCapture) throws -> BalanceResult? {
@@ -4854,7 +4836,7 @@ struct GiftCardMallRefreshView: View {
                             let accepted = model.applyForegroundRefresh(
                                 id: cardID,
                                 result: BalanceResult(balance: captured.balance, transactions: existingTransactions, fetchedAt: Date()),
-                                isAuthoritativeBalance: (body as? [String: Any])?["kind"] as? String == "networkCapture"
+                                isAuthoritativeBalance: true
                             )
                             if accepted { summary = captured }
                             return
