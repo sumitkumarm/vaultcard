@@ -8,6 +8,10 @@ const source = readFileSync(`${__dirname}/../VaultCard/VaultCardApp.swift`, 'utf
 const parser = source.slice(source.indexOf('          let lastDOMBalance = null;'), source.indexOf('          const isCardResponse'))
   .replace(/\\\\/g, '\\'); // Decode Swift multiline string regex escapes.
 
+test('UI refresh fixture includes the same source as real page captures', () => {
+  assert.match(source, /"kind": "domBalance",\s*"source": "availableBalanceSummary",\s*"balance": arguments/);
+});
+
 function node(text, parentElement = null, { hidden = false, table = false } = {}) {
   return {
     textContent: text, parentElement,

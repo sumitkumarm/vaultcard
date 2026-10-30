@@ -5112,6 +5112,7 @@ struct GiftCardMallWebView: UIViewRepresentable {
                 "parserVersion": GiftCardMallBridge.parserVersion,
                 "pageHost": trustedURL.host ?? "",
                 "kind": "domBalance",
+                "source": "availableBalanceSummary",
                 "balance": arguments.contains("--ui-testing-low-refresh") ? 3.99 : 0
             ]
             DispatchQueue.main.async {
